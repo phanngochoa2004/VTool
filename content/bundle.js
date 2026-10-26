@@ -1,0 +1,3518 @@
+/**
+ * CVAT 3D Multi-Frame QA/QC Inspector - Standalone Main World Bundle
+ * Self-contained bundle running natively in Chrome MV3 Main World.
+ * Zero external requests, zero TrustedHTML violations, zero cross-origin script injection.
+ */
+
+(function() {
+    'use strict';
+
+    // Prevent double injection
+    if (window.__CVAT_QAQC_INSPECTOR_LOADED__) return;
+    window.__CVAT_QAQC_INSPECTOR_LOADED__ = true;
+
+    console.log('[CVAT-QAQC] Initializing 3D Multi-Frame QA/QC Inspector (Main World Bundle)...');
+
+    // ------------------------------------------
+    // File: src\engine\math_3d.js
+    // ------------------------------------------
+
+/**
+ * 3D Geometry and Orthographic Projection Math Engine
+ * Supports transforming world points to cuboid-local coordinates,
+ * ROI extraction, and parsing PCD (ASCII/Binary) without server calls or external libraries.
+ */
+class Math3D {
+    /**
+     * Compute 3x3 rotation matrix from Euler angles (XYZ order - standard Three.js convention)
+     * @param {number} rx - rotation around X in radians
+     * @param {number} ry - rotation around Y in radians
+     * @param {number} rz - rotation around Z in radians
+     * @returns {Float32Array} 9-element array representing 3x3 matrix in row-major order
+     */
+    static eulerToRotationMatrix(rx, ry, rz) {
+        const cx = Math.cos(rx);
+        const sx = Math.sin(rx);
+        const cy = Math.cos(ry);
+        const sy = Math.sin(ry);
+        const cz = Math.cos(rz);
+        const sz = Math.sin(rz);
+
+        // Three.js Euler XYZ rotation matrix:
+        // R = R_x * R_y * R_z
+        return new Float32Array([
+            cy * cz, -cy * sz, sy,
+            cx * sz + sx * sy * cz, cx * cz - sx * sy * sz, -sx * cy,
+            sx * sz - cx * sy * cz, sx * cz + cx * sy * sz, cx * cy
+        ]);
+    }
+
+    /**
+     * Transform world points into cuboid local frame and crop to ROI
+     * @param {Float32Array|Array<number>} points - world point cloud [x0, y0, z0, (intensity0), x1, y1, z1...]
+     * @param {number} stride - 3 (x,y,z) or 4 (x,y,z,i)
+     * @param {Object} box - { x, y, z, rx, ry, rz, sx, sy, sz }
+     * @param {number} marginFactor - expansion factor around bounding box (default 1.4)
+     * @returns {Float32Array} local points [lx0, ly0, lz0, (intensity0), ...]
+     */
+    static transformAndCropPoints(points, stride, box, marginFactor = 1.4) {
+        if (!points || points.length === 0) return new Float32Array(0);
+
+        const { x: cx, y: cy, z: cz, rx, ry, rz, sx, sy, sz } = box;
+        const R = this.eulerToRotationMatrix(rx, ry, rz);
+
+        // Inverse rotation matrix is Transpose of R
+        const inv00 = R[0], inv01 = R[3], inv02 = R[6];
+        const inv10 = R[1], inv11 = R[4], inv12 = R[7];
+        const inv20 = R[2], inv21 = R[5], inv22 = R[8];
+
+        const halfX = (sx / 2) * marginFactor;
+        const halfY = (sy / 2) * marginFactor;
+        const halfZ = (sz / 2) * marginFactor;
+
+        const maxPoints = Math.floor(points.length / stride);
+        const outBuffer = new Float32Array(maxPoints * 4); // [lx, ly, lz, intensity]
+        let outCount = 0;
+
+        for (let i = 0; i < points.length; i += stride) {
+            const dx = points[i] - cx;
+            const dy = points[i + 1] - cy;
+            const dz = points[i + 2] - cz;
+
+            // Apply R^T * [dx, dy, dz]
+            const lx = inv00 * dx + inv01 * dy + inv02 * dz;
+            const ly = inv10 * dx + inv11 * dy + inv12 * dz;
+            const lz = inv20 * dx + inv21 * dy + inv22 * dz;
+
+            if (Math.abs(lx) <= halfX && Math.abs(ly) <= halfY && Math.abs(lz) <= halfZ) {
+                const outIdx = outCount * 4;
+                outBuffer[outIdx] = lx;
+                outBuffer[outIdx + 1] = ly;
+                outBuffer[outIdx + 2] = lz;
+                outBuffer[outIdx + 3] = stride >= 4 ? points[i + 3] : 1.0;
+                outCount++;
+            }
+        }
+
+        return outBuffer.subarray(0, outCount * 4);
+    }
+
+    /**
+     * Fast parser for PCD format (ASCII and Binary)
+     * @param {ArrayBuffer} buffer
+     * @returns {{ positions: Float32Array, intensities: Float32Array | null }}
+     */
+    static parsePCD(buffer) {
+        const textDecoder = new TextDecoder('ascii');
+        // Read header (usually within first 1024 bytes)
+        const headerChunk = textDecoder.decode(buffer.slice(0, Math.min(buffer.byteLength, 2048)));
+        const lines = headerChunk.split('\n');
+
+        let dataMode = 'ascii';
+        let fields = [];
+        let sizes = [];
+        let types = [];
+        let counts = [];
+        let pointsCount = 0;
+        let headerByteLength = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            headerByteLength += lines[i].length + 1; // including newline
+
+            if (line.startsWith('FIELDS')) {
+                fields = line.split(/\s+/).slice(1);
+            } else if (line.startsWith('SIZE')) {
+                sizes = line.split(/\s+/).slice(1).map(Number);
+            } else if (line.startsWith('TYPE')) {
+                types = line.split(/\s+/).slice(1);
+            } else if (line.startsWith('COUNT')) {
+                counts = line.split(/\s+/).slice(1).map(Number);
+            } else if (line.startsWith('POINTS')) {
+                pointsCount = parseInt(line.split(/\s+/)[1], 10);
+            } else if (line.startsWith('DATA')) {
+                dataMode = line.split(/\s+/)[1];
+                break;
+            }
+        }
+
+        const xIdx = fields.indexOf('x');
+        const yIdx = fields.indexOf('y');
+        const zIdx = fields.indexOf('z');
+        const iIdx = fields.indexOf('intensity');
+
+        if (xIdx === -1 || yIdx === -1 || zIdx === -1) {
+            console.warn('[Math3D] PCD file missing x, y, or z fields');
+            return null;
+        }
+
+        const positions = new Float32Array(pointsCount * 3);
+        const intensities = iIdx !== -1 ? new Float32Array(pointsCount) : null;
+
+        if (dataMode === 'binary') {
+            const dataView = new DataView(buffer, headerByteLength);
+            let pointRecordSize = 0;
+            for (let i = 0; i < fields.length; i++) {
+                pointRecordSize += (sizes[i] || 4) * (counts[i] || 1);
+            }
+
+            let fieldOffsets = [];
+            let currentOffset = 0;
+            for (let i = 0; i < fields.length; i++) {
+                fieldOffsets.push(currentOffset);
+                currentOffset += (sizes[i] || 4) * (counts[i] || 1);
+            }
+
+            for (let p = 0; p < pointsCount; p++) {
+                const byteOffset = p * pointRecordSize;
+                if (byteOffset + pointRecordSize > dataView.byteLength) break;
+
+                const x = dataView.getFloat32(byteOffset + fieldOffsets[xIdx], true);
+                const y = dataView.getFloat32(byteOffset + fieldOffsets[yIdx], true);
+                const z = dataView.getFloat32(byteOffset + fieldOffsets[zIdx], true);
+
+                const p3 = p * 3;
+                positions[p3] = x;
+                positions[p3 + 1] = y;
+                positions[p3 + 2] = z;
+
+                if (intensities && iIdx !== -1) {
+                    const iOffset = byteOffset + fieldOffsets[iIdx];
+                    const iType = types[iIdx];
+                    const iSize = sizes[iIdx];
+                    if (iType === 'F' && iSize === 4) {
+                        intensities[p] = dataView.getFloat32(iOffset, true);
+                    } else if (iType === 'U' && iSize === 1) {
+                        intensities[p] = dataView.getUint8(iOffset) / 255.0;
+                    } else {
+                        intensities[p] = dataView.getFloat32(iOffset, true);
+                    }
+                }
+            }
+        } else {
+            // ASCII Mode
+            const fullText = textDecoder.decode(buffer);
+            const dataStart = fullText.indexOf('DATA ' + dataMode) + ('DATA ' + dataMode).length;
+            const dataLines = fullText.slice(dataStart).trim().split('\n');
+
+            for (let p = 0; p < Math.min(pointsCount, dataLines.length); p++) {
+                const tokens = dataLines[p].trim().split(/\s+/);
+                const p3 = p * 3;
+                positions[p3] = parseFloat(tokens[xIdx]);
+                positions[p3 + 1] = parseFloat(tokens[yIdx]);
+                positions[p3 + 2] = parseFloat(tokens[zIdx]);
+                if (intensities && iIdx !== -1 && tokens[iIdx]) {
+                    intensities[p] = parseFloat(tokens[iIdx]);
+                }
+            }
+        }
+
+        return { positions, intensities };
+    }
+}
+
+
+    // ------------------------------------------
+    // File: src\engine\ortho_canvas.js
+    // ------------------------------------------
+
+/**
+ * High-performance 2D Orthographic Canvas Renderer for 3D Bounding Boxes & Point Clouds.
+ * Follows CVAT 3D Canvas conventions:
+ * 1. Top View: Footprint viewed from above (Length horizontal, Width vertical).
+ * 2. Side View: Side profile (Length horizontal, Height vertical, ground at bottom).
+ * 3. Front View: Front/Rear profile (Width horizontal, Height vertical, ground at bottom).
+ * Sized compactly with clean, unobtrusive CVAT-style heading cues (green rotation helper dot).
+ */
+class OrthoCanvasRenderer {
+    /**
+     * Compute projection metrics, scale, and layout coordinates for rendering & hit testing
+     * @param {HTMLCanvasElement} canvas
+     * @param {Object} box
+     * @param {'top'|'side'|'front'} viewType
+     * @param {Object} options
+     */
+    static getMetrics(canvas, box, viewType, options = {}) {
+        const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+        const width = canvas.clientWidth || canvas.width || 200;
+        const height = canvas.clientHeight || canvas.height || 120;
+
+        const { sx = 2, sy = 4, sz = 1.5 } = box || {};
+        const zoom = options.zoom || 1.0;
+
+        // Authentic CVAT projection conventions:
+        // Top: Local X horizontal (sx), Local Y vertical (sy). Forward (+Y) points UP. Lateral (+X) points RIGHT.
+        // Side: Local Y horizontal (sy), Local Z vertical (sz). Length horizontal, Height vertical.
+        // Front: Local X horizontal (sx), Local Z vertical (sz). Width horizontal, Height vertical.
+        let dimH = 2;
+        let dimV = 4;
+
+        if (viewType === 'top') {
+            dimH = sx;
+            dimV = sy;
+        } else if (viewType === 'side') {
+            dimH = sy;
+            dimV = sz;
+        } else if (viewType === 'front') {
+            dimH = sx;
+            dimV = sz;
+        }
+
+        const marginFactor = options.marginFactor || 1.35;
+        const padding = 14;
+        const availW = Math.max(10, width - padding * 2);
+        const availH = Math.max(10, height - padding * 2);
+        const maxExtentH = dimH * marginFactor;
+        const maxExtentV = dimV * marginFactor;
+
+        const scale = Math.min(availW / maxExtentH, availH / maxExtentV) * zoom;
+        const centerX = width / 2;
+        const centerY = height / 2;
+
+        const boxPxW = dimH * scale;
+        const boxPxH = dimV * scale;
+        const boxLeft = centerX - boxPxW / 2;
+        const boxTop = centerY - boxPxH / 2;
+        const boxRight = boxLeft + boxPxW;
+        const boxBottom = boxTop + boxPxH;
+
+        // 4 Corner coordinates (Top-Left, Top-Right, Bottom-Left, Bottom-Right)
+        const corners = {
+            tl: { x: boxLeft, y: boxTop },
+            tr: { x: boxRight, y: boxTop },
+            bl: { x: boxLeft, y: boxBottom },
+            br: { x: boxRight, y: boxBottom }
+        };
+
+        // Heading helper dot in Top view (placed on the forward +Y stem)
+        const rotDotX = centerX;
+        const rotDotY = boxTop - 20;
+
+        return {
+            dpr,
+            width,
+            height,
+            sx,
+            sy,
+            sz,
+            dimH,
+            dimV,
+            scale,
+            centerX,
+            centerY,
+            boxPxW,
+            boxPxH,
+            boxLeft,
+            boxTop,
+            boxRight,
+            boxBottom,
+            corners,
+            rotDotX,
+            rotDotY,
+            dotX: rotDotX,
+            dotY: rotDotY
+        };
+    }
+
+    /**
+     * Render an orthogonal projection on a canvas
+     * @param {HTMLCanvasElement} canvas
+     * @param {Float32Array} localPoints - [lx, ly, lz, intensity, ...]
+     * @param {Object} box - { x, y, z, rx, ry, rz, sx, sy, sz }
+     * @param {'top'|'side'|'front'} viewType
+     * @param {Object} options - display preferences & interaction state
+     */
+    static render(canvas, localPoints, box, viewType, options = {}) {
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        const metrics = this.getMetrics(canvas, box, viewType, options);
+        const {
+            dpr, width, height, sx, sy, sz,
+            dimH, dimV, scale, centerX, centerY,
+            boxPxW, boxPxH, boxLeft, boxTop, boxRight, boxBottom,
+            corners, rotDotX, rotDotY
+        } = metrics;
+
+        if (canvas.width !== Math.round(width * dpr) || canvas.height !== Math.round(height * dpr)) {
+            canvas.width = Math.round(width * dpr);
+            canvas.height = Math.round(height * dpr);
+        }
+
+        ctx.save();
+        ctx.scale(dpr, dpr);
+
+        // Interaction inspection
+        const interaction = options.interaction || {};
+        const isInteractingThisView = interaction.activeAction && interaction.viewType === viewType;
+        const isHoveringThisView = interaction.hoverViewType === viewType;
+        const isHoverRotation = (isHoveringThisView && interaction.hoverTarget === 'rotate') ||
+                                (isInteractingThisView && interaction.activeAction === 'rotate');
+        const isActivelyRotating = isInteractingThisView && interaction.activeAction === 'rotate';
+        const isActivelyTranslating = isInteractingThisView && interaction.activeAction === 'translate';
+        const activeResizeAction = isInteractingThisView && interaction.activeAction?.startsWith('resize')
+            ? interaction.activeAction : null;
+
+        // 1. Background
+        ctx.fillStyle = '#141416';
+        ctx.fillRect(0, 0, width, height);
+
+        // Subtle CVAT-style grid
+        this.drawSubtleGrid(ctx, width, height);
+
+        const pointSize = options.pointSize || 1.5;
+
+        // 2. Subtle center crosshair lines
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(centerX, 0);
+        ctx.lineTo(centerX, height);
+        ctx.moveTo(0, centerY);
+        ctx.lineTo(width, centerY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // 3. Render Point Cloud Points
+        let renderedPointsCount = 0;
+        if (localPoints && localPoints.length > 0) {
+            renderedPointsCount = Math.floor(localPoints.length / 4);
+
+            for (let i = 0; i < localPoints.length; i += 4) {
+                const lx = localPoints[i];
+                const ly = localPoints[i + 1];
+                const lz = localPoints[i + 2];
+
+                let px = 0, py = 0, depth = 0;
+
+                if (viewType === 'top') {
+                    // Top: Local X horizontal (sx), Local Y vertical (sy, +Y up)
+                    px = centerX + lx * scale;
+                    py = centerY - ly * scale;
+                    depth = (lz + sz / 2) / Math.max(0.01, sz);
+                } else if (viewType === 'side') {
+                    // Side: Local Y horizontal (sy), Local Z vertical (sz, +Z up)
+                    px = centerX + ly * scale;
+                    py = centerY - lz * scale;
+                    depth = (lx + sx / 2) / Math.max(0.01, sx);
+                } else if (viewType === 'front') {
+                    // Front: Local X horizontal (sx), Local Z vertical (sz, +Z up)
+                    px = centerX + lx * scale;
+                    py = centerY - lz * scale;
+                    depth = (ly + sy / 2) / Math.max(0.01, sy);
+                }
+
+                if (px < 0 || px > width || py < 0 || py > height) continue;
+
+                // Color mapping: Depth gradient (Cyan to Yellow-Green, clean and high contrast)
+                const clampedDepth = Math.max(0, Math.min(1, depth));
+                const r = Math.round(40 + 215 * clampedDepth);
+                const g = Math.round(200 + 55 * (1 - clampedDepth));
+                const b = Math.round(255 * (1 - clampedDepth));
+
+                ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+                ctx.beginPath();
+                ctx.arc(px, py, pointSize, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        // 4. Render Bounding Box Fill & Border
+        ctx.fillStyle = isActivelyTranslating ? 'rgba(10, 132, 255, 0.16)' : 'rgba(24, 75, 140, 0.16)';
+        ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
+
+        ctx.strokeStyle = isActivelyTranslating ? '#0A84FF' : '#FFFFFF';
+        ctx.lineWidth = isActivelyTranslating ? 2.0 : 1.5;
+        ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
+
+        // Highlight active resizing edge if any (edge-drag fallback)
+        if (activeResizeAction && activeResizeAction !== 'resize-corner') {
+            ctx.strokeStyle = '#0A84FF';
+            ctx.lineWidth = 3.5;
+            ctx.beginPath();
+            if (activeResizeAction === 'resize-left') {
+                ctx.moveTo(boxLeft, boxTop);
+                ctx.lineTo(boxLeft, boxBottom);
+            } else if (activeResizeAction === 'resize-right') {
+                ctx.moveTo(boxRight, boxTop);
+                ctx.lineTo(boxRight, boxBottom);
+            } else if (activeResizeAction === 'resize-top') {
+                ctx.moveTo(boxLeft, boxTop);
+                ctx.lineTo(boxRight, boxTop);
+            } else if (activeResizeAction === 'resize-bottom') {
+                ctx.moveTo(boxLeft, boxBottom);
+                ctx.lineTo(boxRight, boxBottom);
+            }
+            ctx.stroke();
+        }
+
+        // Ground reference line for Side and Front views
+        if (viewType === 'side' || viewType === 'front') {
+            const groundY = boxBottom;
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 2]);
+            ctx.beginPath();
+            ctx.moveTo(boxLeft - 10, groundY);
+            ctx.lineTo(boxRight + 10, groundY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+        }
+
+        // 5. CVAT-style Heading & Rotation Helper (Top view only)
+        if (viewType === 'top') {
+            this.drawCVATHeadingHelper(
+                ctx,
+                centerX,
+                centerY,
+                boxLeft,
+                boxTop,
+                boxPxW,
+                boxPxH,
+                isHoverRotation,
+                isActivelyRotating
+            );
+        }
+
+        // 6. CVAT 4 Red Corner Handles (All views)
+        this.drawCornerHandles(ctx, corners, interaction);
+
+        // 7. Interactive HUD Badges
+        if (isActivelyRotating) {
+            const rz = box?.rz ?? 0;
+            const deg = ((rz * 180 / Math.PI) % 360).toFixed(1);
+            this.drawBadge(ctx, rotDotX, rotDotY, `⟳ Yaw: ${deg}°`, '#30D158');
+        } else if (isActivelyTranslating) {
+            const { x = 0, y = 0, z = 0 } = box || {};
+            const posText = viewType === 'top'
+                ? `X: ${x.toFixed(2)}m  Y: ${y.toFixed(2)}m`
+                : `Z: ${z.toFixed(2)}m`;
+            this.drawBadge(ctx, centerX, boxTop, posText, '#0A84FF');
+        } else if (activeResizeAction) {
+            const dimText = `${(box.sx || sx).toFixed(2)} × ${(box.sy || sy).toFixed(2)} × ${(box.sz || sz).toFixed(2)}m`;
+            this.drawBadge(ctx, centerX, boxTop, dimText, '#FF3B30');
+        }
+
+        // 8. Dimension Caption (Bottom Left)
+        ctx.font = '500 9.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+        let dimLabel = `${dimH.toFixed(2)}m × ${dimV.toFixed(2)}m`;
+        if (viewType === 'top') {
+            dimLabel = `W:${sx.toFixed(2)}  L:${sy.toFixed(2)}m`;
+        } else if (viewType === 'side') {
+            dimLabel = `L:${sy.toFixed(2)}  H:${sz.toFixed(2)}m`;
+        } else if (viewType === 'front') {
+            dimLabel = `W:${sx.toFixed(2)}  H:${sz.toFixed(2)}m`;
+        }
+        ctx.fillText(dimLabel, 6, height - 5);
+
+        // Points Count (Bottom Right)
+        const ptsText = renderedPointsCount > 0 ? `${renderedPointsCount} pts` : '0 pts';
+        ctx.fillStyle = renderedPointsCount > 0 ? 'rgba(48, 209, 88, 0.85)' : 'rgba(255, 159, 10, 0.7)';
+        const ptsMetrics = ctx.measureText(ptsText);
+        ctx.fillText(ptsText, width - ptsMetrics.width - 6, height - 5);
+
+        ctx.restore();
+    }
+
+    /**
+     * Draw subtle grid dots or lines matching CVAT dark mode
+     */
+    static drawSubtleGrid(ctx, w, h) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.025)';
+        ctx.lineWidth = 1;
+        const gridSize = 20;
+        ctx.beginPath();
+        for (let x = 0; x < w; x += gridSize) {
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, h);
+        }
+        for (let y = 0; y < h; y += gridSize) {
+            ctx.moveTo(0, y);
+            ctx.lineTo(w, y);
+        }
+        ctx.stroke();
+    }
+
+    /**
+     * Draw directional 2D arrow helper
+     */
+    static drawArrow(ctx, fromX, fromY, toX, toY, color, headLen = 8, lineWidth = 1.8) {
+        const angle = Math.atan2(toY - fromY, toX - fromX);
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = lineWidth;
+
+        ctx.beginPath();
+        ctx.moveTo(fromX, fromY);
+        ctx.lineTo(toX, toY);
+        ctx.stroke();
+
+        // Arrowhead
+        ctx.beginPath();
+        ctx.moveTo(toX, toY);
+        ctx.lineTo(
+            toX - headLen * Math.cos(angle - Math.PI / 6),
+            toY - headLen * Math.sin(angle - Math.PI / 6)
+        );
+        ctx.lineTo(
+            toX - headLen * Math.cos(angle + Math.PI / 6),
+            toY - headLen * Math.sin(angle + Math.PI / 6)
+        );
+        ctx.closePath();
+        ctx.fill();
+    }
+
+    /**
+     * Draw CVAT-style Orientation & Rotation Helper in Top view
+     * Includes:
+     * - Forward Green Arrow (+Y heading) protruding from front edge with green circle rotation helper dot
+     * - Lateral Red Arrow (+X) protruding from right edge
+     * - Center Pivot Dot (Blue)
+     * - Circular guide orbit when rotating
+     */
+    static drawCVATHeadingHelper(ctx, cx, cy, boxL, boxT, boxW, boxH, isHovered = false, isInteracting = false) {
+        const boxR = boxL + boxW;
+        const boxB = boxT + boxH;
+
+        const rotDotX = cx;
+        const rotDotY = boxT - 20;
+        const arrowTipY = boxT - 36;
+        const latTipX = boxR + 28;
+
+        // Circular guide orbit and radial ray when rotating
+        if (isInteracting) {
+            const rotRadius = Math.hypot(rotDotX - cx, rotDotY - cy);
+            ctx.strokeStyle = 'rgba(48, 209, 88, 0.35)';
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.beginPath();
+            ctx.arc(cx, cy, rotRadius, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            ctx.strokeStyle = '#30D158';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(rotDotX, rotDotY);
+            ctx.stroke();
+        }
+
+        // Front edge highlight (green line along the forward top edge)
+        ctx.strokeStyle = '#30D158';
+        ctx.lineWidth = isHovered || isInteracting ? 3.0 : 2.0;
+        ctx.beginPath();
+        ctx.moveTo(boxL, boxT);
+        ctx.lineTo(boxR, boxT);
+        ctx.stroke();
+
+        // Lateral Arrow (Red, +X)
+        this.drawArrow(ctx, boxR, cy, latTipX, cy, '#FF3B30', 7, 1.8);
+
+        // Forward Heading Arrow (Green, +Y)
+        this.drawArrow(ctx, cx, boxT, cx, arrowTipY, '#30D158', 8, 2.0);
+
+        // Rotation helper halo ring if hovered or interacting
+        if (isHovered || isInteracting) {
+            ctx.strokeStyle = 'rgba(48, 209, 88, 0.45)';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(rotDotX, rotDotY, 9, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+
+        // Rotation Helper Green Dot
+        const dotRadius = isHovered || isInteracting ? 6.5 : 4.5;
+        ctx.fillStyle = '#30D158';
+        ctx.beginPath();
+        ctx.arc(rotDotX, rotDotY, dotRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 1.2;
+        ctx.stroke();
+
+        // Center Pivot Dot (Blue)
+        ctx.fillStyle = '#0A84FF';
+        ctx.beginPath();
+        ctx.arc(cx, cy, 2.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = '#FFFFFF';
+        ctx.lineWidth = 0.8;
+        ctx.stroke();
+    }
+
+    /**
+     * Draw CVAT 4 Red Corner Handles for 4-corner resizing
+     * Highlights active dragging corner and renders anchor indicator on fixed opposite corner
+     */
+    static drawCornerHandles(ctx, corners, interaction = {}) {
+        if (!corners) return;
+
+        const { activeCornerKey, oppositeCornerKey, hoverTarget } = interaction;
+
+        for (const [key, pt] of Object.entries(corners)) {
+            const isHovered = hoverTarget === `corner-${key}`;
+            const isActive = activeCornerKey === key;
+            const isOppositeAnchor = oppositeCornerKey === key;
+
+            // If this is the opposite anchor during resize, draw cyan anchor indicator
+            if (isOppositeAnchor) {
+                ctx.save();
+                ctx.strokeStyle = '#0A84FF';
+                ctx.lineWidth = 2;
+                ctx.fillStyle = 'rgba(10, 132, 255, 0.35)';
+                const sz = 12;
+                ctx.strokeRect(pt.x - sz / 2, pt.y - sz / 2, sz, sz);
+                ctx.fillRect(pt.x - sz / 2, pt.y - sz / 2, sz, sz);
+                ctx.restore();
+            }
+
+            // Glow halo ring on hover or active
+            if (isHovered || isActive) {
+                ctx.strokeStyle = 'rgba(255, 59, 48, 0.45)';
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(pt.x, pt.y, 9, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Red corner circle
+            const radius = (isHovered || isActive) ? 6.5 : 4.5;
+            ctx.fillStyle = '#FF3B30';
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, radius, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Outline
+            ctx.strokeStyle = (isHovered || isActive) ? '#FFFFFF' : '#000000';
+            ctx.lineWidth = (isHovered || isActive) ? 1.5 : 1.2;
+            ctx.stroke();
+        }
+    }
+
+    /**
+     * Draw interactive HUD badge overlay on canvas
+     */
+    static drawBadge(ctx, x, y, text, borderColor = '#30D158') {
+        ctx.font = '600 10.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+        const textW = ctx.measureText(text).width;
+        const padX = 7;
+        const badgeW = textW + padX * 2;
+        const badgeH = 18;
+        const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+        const bx = Math.max(5, Math.min(ctx.canvas.width / dpr - badgeW - 5, x - badgeW / 2));
+        const by = Math.max(5, y - badgeH - 6);
+
+        ctx.fillStyle = 'rgba(20, 20, 24, 0.92)';
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 1;
+        if (typeof ctx.roundRect === 'function') {
+            ctx.beginPath();
+            ctx.roundRect(bx, by, badgeW, badgeH, 4);
+            ctx.fill();
+            ctx.stroke();
+        } else {
+            ctx.fillRect(bx, by, badgeW, badgeH);
+            ctx.strokeRect(bx, by, badgeW, badgeH);
+        }
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillText(text, bx + padX, by + 13);
+    }
+
+    static hexToRgba(hex, alpha) {
+        let c = hex.replace('#', '');
+        if (c.length === 3) c = c.split('').map(x => x + x).join('');
+        const num = parseInt(c, 16);
+        return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
+    }
+}
+
+
+    // ------------------------------------------
+    // File: src\core\pcd_cache.js
+    // ------------------------------------------
+
+/**
+ * In-Memory Point Cloud Cache (Strict Zero-Request Guarantee)
+ * Safely captures point cloud data from CVAT Three.js scenes and in-memory frame decoders.
+ * NEVER makes network requests to the server.
+ */
+class PCDCache {
+    constructor() {
+        /** @type {Map<number, { positions: Float32Array, stride: number }>} */
+        this.cache = new Map();
+        this.maxFrames = 120; // Cache up to 120 frames in memory
+    }
+
+    /**
+     * Check if a frame's point cloud is already in client memory
+     * @param {number} frameNumber
+     * @returns {boolean}
+     */
+    has(frameNumber) {
+        return this.cache.has(frameNumber);
+    }
+
+    /**
+     * Get points for a frame if cached
+     * @param {number} frameNumber
+     * @returns {{ positions: Float32Array, stride: number } | null}
+     */
+    get(frameNumber) {
+        return this.cache.get(frameNumber) || null;
+    }
+
+    /**
+     * Store points directly
+     * @param {number} frameNumber
+     * @param {Float32Array} positions
+     * @param {number} stride
+     */
+    set(frameNumber, positions, stride = 3) {
+        if (!positions || positions.length === 0) return;
+        if (this.cache.size >= this.maxFrames) {
+            // Drop oldest key
+            const firstKey = this.cache.keys().next().value;
+            this.cache.delete(firstKey);
+        }
+        this.cache.set(frameNumber, { positions, stride });
+    }
+
+    /**
+     * Capture points from active Three.js canvas in CVAT
+     * @param {number} frameNumber
+     * @param {any} canvasInstance - CVAT Canvas3d instance
+     * @returns {boolean} true if captured successfully
+     */
+    captureFromThreeScene(frameNumber, canvasInstance) {
+        if (!canvasInstance || !canvasInstance.view || !canvasInstance.view.views) {
+            return false;
+        }
+
+        try {
+            const views = canvasInstance.view.views;
+            // The top or perspective scene contains the Points object
+            const scene = views.top?.scene || views.perspective?.scene;
+            if (!scene) return false;
+
+            let pointsObj = null;
+            scene.traverse((child) => {
+                if (child.isPoints && child.geometry && child.geometry.attributes.position) {
+                    pointsObj = child;
+                }
+            });
+
+            if (pointsObj && pointsObj.geometry) {
+                const posAttr = pointsObj.geometry.attributes.position;
+                if (posAttr && posAttr.array) {
+                    // Clone or copy array to ensure persistence
+                    const cloned = new Float32Array(posAttr.array);
+                    this.set(frameNumber, cloned, 3);
+                    return true;
+                }
+            }
+        } catch (err) {
+            console.warn('[PCDCache] Could not capture points from Three scene:', err);
+        }
+        return false;
+    }
+
+    /**
+     * Try reading from CVAT's in-memory frame decoded chunks without server request
+     * @param {number} frameNumber
+     * @param {any} jobInstance
+     * @returns {Promise<boolean>}
+     */
+    async captureFromDecodedChunks(frameNumber, jobInstance) {
+        if (this.has(frameNumber)) return true;
+        if (!jobInstance || !jobInstance.frames) return false;
+
+        try {
+            if (typeof jobInstance.frames.get === 'function') {
+                const frameData = await jobInstance.frames.get(frameNumber);
+                if (frameData && typeof frameData.data === 'function') {
+                    const data = await frameData.data();
+                    const imageData = data?.imageData;
+                    if (imageData && imageData instanceof Blob) {
+                        const buffer = await imageData.arrayBuffer();
+                        const parsed = Math3D.parsePCD(buffer);
+                        if (parsed && parsed.positions) {
+                            this.set(frameNumber, parsed.positions, 3);
+                            return true;
+                        }
+                    }
+                }
+            }
+        } catch (e) {
+            // Unbuffered frame or decoding error - gracefully ignore
+        }
+        return false;
+    }
+
+    /**
+     * Preload and decode point cloud data across all frames of the active track
+     * @param {number[]} frameNumbers
+     * @param {any} jobInstance
+     * @param {Function} onFrameDecoded - (frame, pointCloudData) => void
+     */
+    async preloadTrackFrames(frameNumbers, jobInstance, onFrameDecoded) {
+        if (!jobInstance || !Array.isArray(frameNumbers)) return;
+
+        for (const frameNum of frameNumbers) {
+            if (this.has(frameNum)) {
+                if (typeof onFrameDecoded === 'function') {
+                    onFrameDecoded(frameNum, this.get(frameNum));
+                }
+                continue;
+            }
+
+            try {
+                const success = await this.captureFromDecodedChunks(frameNum, jobInstance);
+                if (success && typeof onFrameDecoded === 'function') {
+                    onFrameDecoded(frameNum, this.get(frameNum));
+                }
+            } catch (_) {}
+        }
+    }
+
+    clear() {
+        this.cache.clear();
+    }
+}
+
+
+    // ------------------------------------------
+    // File: src\core\track_reader.js
+    // ------------------------------------------
+
+/**
+ * Track Reader for CVAT 3D Annotations
+ * Extracts multi-frame 3D bounding box states for any selected track or object.
+ * Pure in-memory: 0 server requests.
+ */
+class TrackReader {
+    /**
+     * Read cuboid states across all frames for a given object/track
+     * @param {number} clientID - Selected object ID
+     * @param {any} jobInstance - CVAT Job instance from Redux store
+     * @returns {Promise<Array<{ frame: number, points: number[], box: Object, keyframe: boolean, outside: boolean, label: Object }>>}
+     */
+    static async getTrackFrames(clientID, jobInstance) {
+        if (!jobInstance || clientID === null || typeof clientID === 'undefined') {
+            return [];
+        }
+
+        const startFrame = jobInstance.startFrame || 0;
+        const stopFrame = jobInstance.stopFrame || (jobInstance.size ? jobInstance.size - 1 : 0);
+        const results = [];
+
+        // Check in-memory AnnotationsCollection directly if available
+        let directTrack = null;
+        try {
+            // Some CVAT builds attach collection to session or job
+            const cache = window.cvat?._annotationsCache;
+            if (cache && cache.collection && cache.collection.has(jobInstance)) {
+                const { collection } = cache.collection.get(jobInstance);
+                if (collection && collection.objects && collection.objects[clientID]) {
+                    directTrack = collection.objects[clientID];
+                }
+            }
+        } catch (_) {}
+
+        if (directTrack && typeof directTrack.get === 'function') {
+            // Fastest path: query the Track object directly across all frames
+            for (let f = startFrame; f <= stopFrame; f++) {
+                try {
+                    const data = directTrack.get(f);
+                    if (data && !data.outside && data.points && data.points.length >= 9) {
+                        results.push({
+                            frame: f,
+                            points: [...data.points],
+                            box: this.parsePointsToBox(data.points),
+                            keyframe: !!data.keyframe,
+                            outside: !!data.outside,
+                            label: directTrack.label || { name: 'Object', color: '#30D158' }
+                        });
+                    }
+                } catch (e) {
+                    // Frame might not be interpolatable
+                }
+            }
+            return results;
+        }
+
+        // Standard path: query job.annotations.get(f, true, []) which evaluates in-memory from collection
+        const framePromises = [];
+        for (let f = startFrame; f <= stopFrame; f++) {
+            framePromises.push((async (frameNum) => {
+                try {
+                    const states = await jobInstance.annotations.get(frameNum, true, []);
+                    if (!Array.isArray(states)) return null;
+                    const state = states.find(s => s.clientID === clientID);
+                    if (state && !state.outside && state.points && state.points.length >= 9) {
+                        return {
+                            frame: frameNum,
+                            points: [...state.points],
+                            box: this.parsePointsToBox(state.points),
+                            keyframe: !!state.keyframe,
+                            outside: !!state.outside,
+                            label: {
+                                id: state.label?.id,
+                                name: state.label?.name || 'Object',
+                                color: state.label?.color || '#30D158'
+                            }
+                        };
+                    }
+                } catch (err) {
+                    return null;
+                }
+                return null;
+            })(f));
+        }
+
+        const settled = await Promise.all(framePromises);
+        for (const item of settled) {
+            if (item) results.push(item);
+        }
+
+        // Sort by frame ascending
+        results.sort((a, b) => a.frame - b.frame);
+        return results;
+    }
+
+    /**
+     * Parse CVAT 3D cuboid points array [x, y, z, rx, ry, rz, sx, sy, sz, ...]
+     * @param {number[]} points
+     * @returns {{ x: number, y: number, z: number, rx: number, ry: number, rz: number, sx: number, sy: number, sz: number }}
+     */
+    static parsePointsToBox(points) {
+        return {
+            x: points[0] || 0,
+            y: points[1] || 0,
+            z: points[2] || 0,
+            rx: points[3] || 0,
+            ry: points[4] || 0,
+            rz: points[5] || 0,
+            sx: points[6] || 1, // width
+            sy: points[7] || 1, // length
+            sz: points[8] || 1  // height
+        };
+    }
+
+    /**
+     * Convert box parameters back to CVAT 3D points array [x, y, z, rx, ry, rz, sx, sy, sz, ...]
+     * @param {Object} box - { x, y, z, rx, ry, rz, sx, sy, sz }
+     * @param {number[]} [originalPoints] - optional existing points array to preserve extra attributes
+     * @returns {number[]}
+     */
+    static boxToPoints(box, originalPoints) {
+        const pts = originalPoints ? [...originalPoints] : new Array(16).fill(0);
+        pts[0] = typeof box.x === 'number' ? box.x : 0;
+        pts[1] = typeof box.y === 'number' ? box.y : 0;
+        pts[2] = typeof box.z === 'number' ? box.z : 0;
+        pts[3] = typeof box.rx === 'number' ? box.rx : 0;
+        pts[4] = typeof box.ry === 'number' ? box.ry : 0;
+        pts[5] = typeof box.rz === 'number' ? box.rz : 0;
+        pts[6] = Math.max(0.01, typeof box.sx === 'number' ? box.sx : 1);
+        pts[7] = Math.max(0.01, typeof box.sy === 'number' ? box.sy : 1);
+        pts[8] = Math.max(0.01, typeof box.sz === 'number' ? box.sz : 1);
+        return pts;
+    }
+}
+
+
+    // ------------------------------------------
+    // File: src\core\cvat_hook.js
+    // ------------------------------------------
+
+/**
+ * CVAT Client Hook
+ * Connects directly to CVAT's React Fiber, Redux store, and Canvas3d instance.
+ * Completely client-side and reactive.
+ */
+class CVATHook {
+    constructor() {
+        this.store = null;
+        this.jobInstance = null;
+        this.canvasInstance = null;
+        this.activeClientID = null;
+        this.currentFrame = 0;
+        this.listeners = {
+            objectChange: [],
+            frameChange: [],
+            canvasReady: [],
+            objectUpdated: [],
+            historyChange: []
+        };
+        this.isHooked = false;
+        this._undoRedoLock = false;
+    }
+
+    /**
+     * Initialize connection to CVAT client
+     * @returns {Promise<boolean>}
+     */
+    async init() {
+        return new Promise((resolve) => {
+            const checkInterval = setInterval(() => {
+                const store = this.findReduxStore();
+                if (store) {
+                    clearInterval(checkInterval);
+                    this.store = store;
+                    this.setupStoreListener();
+                    this.isHooked = true;
+                    console.log('[CVAT-QAQC] Successfully hooked into CVAT Redux store');
+                    resolve(true);
+                }
+            }, 500);
+
+            // Timeout after 30s if not found
+            setTimeout(() => {
+                clearInterval(checkInterval);
+                if (!this.isHooked) {
+                    console.warn('[CVAT-QAQC] Could not hook into CVAT store within 30s');
+                    resolve(false);
+                }
+            }, 30000);
+        });
+    }
+
+    /**
+     * Find Redux Store from React Fiber root or window
+     */
+    findReduxStore() {
+        // Direct global check
+        if (window.__REDUX_STORE__) {
+            return window.__REDUX_STORE__;
+        }
+
+        const rootEl = document.getElementById('root');
+        if (!rootEl) return null;
+
+        const fiberKey = Object.keys(rootEl).find(k => k.startsWith('__reactContainer$') || k.startsWith('__reactFiber$'));
+        if (!fiberKey) return null;
+
+        let rootFiber = rootEl[fiberKey];
+        const queue = [rootFiber];
+        let maxDepth = 250;
+
+        while (queue.length > 0 && maxDepth-- > 0) {
+            const node = queue.shift();
+            if (!node) continue;
+
+            const props = node.memoizedProps;
+            if (props) {
+                if (props.store && typeof props.store.getState === 'function') {
+                    return props.store;
+                }
+                if (props.value && props.value.store && typeof props.value.store.getState === 'function') {
+                    return props.value.store;
+                }
+            }
+
+            if (node.child) queue.push(node.child);
+            if (node.sibling) queue.push(node.sibling);
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolve currently active or selected 3D object clientID from Redux state & Canvas
+     * @param {any} state
+     * @returns {number|null}
+     */
+    findActiveClientID(state) {
+        if (!state || !state.annotation) return null;
+        const ann = state.annotation.annotations;
+        if (!ann) return null;
+
+        // 1. Check activatedStateID (currently focused / edited object)
+        if (typeof ann.activatedStateID === 'number') {
+            return ann.activatedStateID;
+        }
+
+        // 2. Check selectedStatesID (selected in objects sidebar or via box selection)
+        if (Array.isArray(ann.selectedStatesID) && ann.selectedStatesID.length > 0) {
+            const firstSelected = ann.selectedStatesID[0];
+            if (typeof firstSelected === 'number') {
+                return firstSelected;
+            }
+        }
+
+        // 3. Check Canvas3d activatedElementID
+        const canvas = state.annotation.canvas?.instance;
+        if (canvas && typeof canvas.activatedElementID === 'number') {
+            return canvas.activatedElementID;
+        }
+
+        // 4. Auto-detect: if on current frame there is a 3D cuboid, auto-select it!
+        const states = ann.states || [];
+        const cuboidState = states.find(s => s.shapeType === 'cuboid' || (s.points && s.points.length >= 9));
+        if (cuboidState && typeof cuboidState.clientID === 'number') {
+            return cuboidState.clientID;
+        }
+
+        return null;
+    }
+
+    /**
+     * Re-inspect Redux state and force refresh of current active 3D object
+     */
+    refreshActiveObject() {
+        if (!this.store) return;
+        const state = this.store.getState();
+        if (!state || !state.annotation) return;
+
+        const job = state.annotation.job?.instance || null;
+        const canvas = state.annotation.canvas?.instance || null;
+        const clientID = this.findActiveClientID(state);
+        const frame = state.annotation.player?.frame?.number ?? 0;
+
+        this.jobInstance = job;
+        this.canvasInstance = canvas;
+        this.currentFrame = frame;
+        this.activeClientID = clientID;
+
+        this.emit('objectChange', { clientID, job, canvas, frame });
+    }
+
+    /**
+     * Subscribe to Redux store updates
+     */
+    setupStoreListener() {
+        if (!this.store) return;
+
+        let prevClientID = null;
+        let prevFrame = null;
+        let prevCanvas = null;
+        let prevUndoLength = 0;
+        let prevRedoLength = 0;
+
+        this.store.subscribe(() => {
+            try {
+                const state = this.store.getState();
+                if (!state || !state.annotation) return;
+
+                const job = state.annotation.job?.instance || null;
+                const canvas = state.annotation.canvas?.instance || null;
+                const clientID = this.findActiveClientID(state);
+                const frame = state.annotation.player?.frame?.number ?? 0;
+
+                this.jobInstance = job;
+                this.canvasInstance = canvas;
+                this.currentFrame = frame;
+
+                if (canvas !== prevCanvas && canvas) {
+                    prevCanvas = canvas;
+                    this.emit('canvasReady', canvas);
+                }
+
+                if (clientID !== prevClientID) {
+                    prevClientID = clientID;
+                    this.activeClientID = clientID;
+                    this.emit('objectChange', { clientID, job, canvas, frame });
+                }
+
+                if (frame !== prevFrame) {
+                    prevFrame = frame;
+                    this.emit('frameChange', { frame, clientID, job, canvas });
+                }
+
+                // Check CVAT Undo / Redo history changes
+                const annHistory = state.annotation.annotations?.history;
+                const undoLen = annHistory?.undo?.length ?? 0;
+                const redoLen = annHistory?.redo?.length ?? 0;
+
+                if (undoLen !== prevUndoLength || redoLen !== prevRedoLength) {
+                    prevUndoLength = undoLen;
+                    prevRedoLength = redoLen;
+                    this.emit('historyChange', { undoLen, redoLen, history: annHistory, clientID: this.activeClientID, frame });
+                }
+            } catch (err) {
+                console.error('[CVAT-QAQC] Error in store subscriber:', err);
+            }
+        });
+
+        // Trigger initial state
+        const initialState = this.store.getState();
+        if (initialState?.annotation) {
+            this.jobInstance = initialState.annotation.job?.instance;
+            this.canvasInstance = initialState.annotation.canvas?.instance;
+            this.activeClientID = this.findActiveClientID(initialState);
+            this.currentFrame = initialState.annotation.player?.frame?.number ?? 0;
+            if (this.activeClientID !== null) {
+                this.emit('objectChange', {
+                    clientID: this.activeClientID,
+                    job: this.jobInstance,
+                    canvas: this.canvasInstance,
+                    frame: this.currentFrame
+                });
+            }
+        }
+    }
+
+    /**
+     * Jump CVAT main viewport to requested frame
+     * @param {number} frameNumber
+     */
+    jumpToFrame(frameNumber) {
+        const target = parseInt(frameNumber, 10);
+        if (isNaN(target)) return;
+
+        console.log(`[CVAT-QAQC] Requesting frame jump to #${target}`);
+
+        // Method 1: Ant Design Slider React props
+        try {
+            const slider = document.querySelector('.cvat-player-slider');
+            if (slider) {
+                const propsKey = Object.keys(slider).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+                if (propsKey && slider[propsKey] && typeof slider[propsKey].onChange === 'function') {
+                    slider[propsKey].onChange(target);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.warn('[CVAT-QAQC] slider jump error:', e);
+        }
+
+        // Method 2: InputNumber inside .cvat-player-frame-selector
+        try {
+            const inputEl = document.querySelector('.cvat-player-frame-selector input') || document.querySelector('.cvat-player-frame-selector');
+            if (inputEl) {
+                inputEl.focus();
+                const propsKey = Object.keys(inputEl).find(k => k.startsWith('__reactProps$') || k.startsWith('__reactEventHandlers$'));
+                const protoSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                if (protoSetter) {
+                    protoSetter.call(inputEl, String(target));
+                } else {
+                    inputEl.value = String(target);
+                }
+
+                inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+                inputEl.dispatchEvent(new Event('change', { bubbles: true }));
+
+                if (propsKey && inputEl[propsKey]) {
+                    if (typeof inputEl[propsKey].onPressEnter === 'function') {
+                        inputEl[propsKey].onPressEnter({ target: { value: target } });
+                    }
+                    if (typeof inputEl[propsKey].onBlur === 'function') {
+                        inputEl[propsKey].onBlur({ target: { value: target } });
+                    }
+                }
+
+                inputEl.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+                inputEl.dispatchEvent(new Event('blur', { bubbles: true }));
+                return;
+            }
+        } catch (e) {
+            console.warn('[CVAT-QAQC] input selector jump error:', e);
+        }
+
+        // Method 3: Redux store dispatch if available
+        try {
+            if (this.store) {
+                this.store.dispatch({
+                    type: 'CHANGE_FRAME',
+                    payload: { frame: target }
+                });
+            }
+        } catch (_) {}
+    }
+
+    /**
+     * Update 3D cuboid points for an object at a specific frame (Pure client-side, 0 server requests)
+     * @param {number} frameNumber
+     * @param {number} clientID
+     * @param {number[]} newPoints
+     * @returns {Promise<boolean>}
+     */
+    async updateObjectCuboid(frameNumber, clientID, newPoints) {
+        if (!this.jobInstance || clientID === null || typeof clientID === 'undefined') {
+            console.warn('[CVAT-QAQC] Cannot update cuboid: Job instance or clientID missing');
+            return false;
+        }
+
+        try {
+            // 1. Fetch in-memory ObjectStates for this frame
+            const states = await this.jobInstance.annotations.get(frameNumber, true, []);
+            if (!Array.isArray(states)) return false;
+
+            const targetState = states.find(s => s.clientID === clientID);
+            if (!targetState) {
+                console.warn(`[CVAT-QAQC] Object #${clientID} not found on frame #${frameNumber}`);
+                return false;
+            }
+
+            // 2. Update points in-place
+            targetState.points = [...newPoints];
+
+            // 3. Save to CVAT client-side AnnotationsCollection (0 HTTP requests)
+            await targetState.save();
+            console.log(`[CVAT-QAQC] In-memory cuboid updated for Object #${clientID} at frame #${frameNumber}`);
+
+            // 4. Sync to CVAT Redux store so CVAT top-bar and history stack register the change
+            if (this.store && this.jobInstance?.actions) {
+                try {
+                    const history = await this.jobInstance.actions.get();
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: {
+                            states: freshStates,
+                            history
+                        }
+                    });
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] Could not sync history to Redux:', e);
+                }
+            }
+
+            // 5. If this is the active frame in CVAT's main viewport, notify canvas
+            if (frameNumber === this.currentFrame && this.canvasInstance) {
+                const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
+                const perspective = canvasDOM?.perspective;
+                if (perspective) {
+                    perspective.dispatchEvent(new CustomEvent('canvas.edited', {
+                        bubbles: false,
+                        cancelable: true,
+                        detail: {
+                            state: targetState,
+                            points: [...newPoints]
+                        }
+                    }));
+                }
+            }
+
+            this.emit('objectUpdated', {
+                clientID,
+                frame: frameNumber,
+                points: [...newPoints]
+            });
+
+            return true;
+        } catch (err) {
+            console.error('[CVAT-QAQC] Failed to update in-memory cuboid:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Perform Undo directly on CVAT client-side history stack
+     * @returns {Promise<boolean>}
+     */
+    async undo() {
+        if (this._undoRedoLock) return false;
+        this._undoRedoLock = true;
+        setTimeout(() => { this._undoRedoLock = false; }, 200);
+
+        console.log('[CVAT-QAQC] Executing Undo on CVAT...');
+
+        // Method 1: Click CVAT's native Undo button in top-bar if active
+        if (typeof document !== 'undefined') {
+            try {
+                const nativeUndoBtn = document.querySelector('.cvat-annotation-header-undo-button');
+                if (nativeUndoBtn && !nativeUndoBtn.disabled && nativeUndoBtn.style.pointerEvents !== 'none' && nativeUndoBtn.style.opacity !== '0.5') {
+                    nativeUndoBtn.click();
+                    return true;
+                }
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Native undo button click error:', e);
+            }
+        }
+
+        // Method 2: Direct jobInstance.actions.undo() + Redux sync + Canvas update
+        if (this.jobInstance?.actions?.undo) {
+            try {
+                const affectedIDs = await this.jobInstance.actions.undo();
+                const history = await this.jobInstance.actions.get();
+                const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+
+                if (this.store) {
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: { states: freshStates, history }
+                    });
+                }
+
+                if (this.canvasInstance) {
+                    const targetState = freshStates.find(s => s.clientID === this.activeClientID);
+                    if (targetState) {
+                        const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
+                        const perspective = canvasDOM?.perspective;
+                        if (perspective) {
+                            perspective.dispatchEvent(new CustomEvent('canvas.edited', {
+                                bubbles: false,
+                                cancelable: true,
+                                detail: {
+                                    state: targetState,
+                                    points: [...targetState.points]
+                                }
+                            }));
+                        }
+                    }
+                }
+
+                this.emit('historyChange', { history, clientID: this.activeClientID, frame: this.currentFrame });
+                return true;
+            } catch (err) {
+                console.error('[CVAT-QAQC] Direct job actions undo error:', err);
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Perform Redo directly on CVAT client-side history stack
+     * @returns {Promise<boolean>}
+     */
+    async redo() {
+        if (this._undoRedoLock) return false;
+        this._undoRedoLock = true;
+        setTimeout(() => { this._undoRedoLock = false; }, 200);
+
+        console.log('[CVAT-QAQC] Executing Redo on CVAT...');
+
+        // Method 1: Click CVAT's native Redo button in top-bar if active
+        if (typeof document !== 'undefined') {
+            try {
+                const nativeRedoBtn = document.querySelector('.cvat-annotation-header-redo-button');
+                if (nativeRedoBtn && !nativeRedoBtn.disabled && nativeRedoBtn.style.pointerEvents !== 'none' && nativeRedoBtn.style.opacity !== '0.5') {
+                    nativeRedoBtn.click();
+                    return true;
+                }
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Native redo button click error:', e);
+            }
+        }
+
+        // Method 2: Direct jobInstance.actions.redo() + Redux sync + Canvas update
+        if (this.jobInstance?.actions?.redo) {
+            try {
+                const affectedIDs = await this.jobInstance.actions.redo();
+                const history = await this.jobInstance.actions.get();
+                const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+
+                if (this.store) {
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: { states: freshStates, history }
+                    });
+                }
+
+                if (this.canvasInstance) {
+                    const targetState = freshStates.find(s => s.clientID === this.activeClientID);
+                    if (targetState) {
+                        const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
+                        const perspective = canvasDOM?.perspective;
+                        if (perspective) {
+                            perspective.dispatchEvent(new CustomEvent('canvas.edited', {
+                                bubbles: false,
+                                cancelable: true,
+                                detail: {
+                                    state: targetState,
+                                    points: [...targetState.points]
+                                }
+                            }));
+                        }
+                    }
+                }
+
+                this.emit('historyChange', { history, clientID: this.activeClientID, frame: this.currentFrame });
+                return true;
+            } catch (err) {
+                console.error('[CVAT-QAQC] Direct job actions redo error:', err);
+                return false;
+            }
+        }
+
+        return false;
+    }
+
+    on(event, callback) {
+        if (this.listeners[event]) {
+            this.listeners[event].push(callback);
+        }
+    }
+
+    emit(event, data) {
+        if (this.listeners[event]) {
+            for (const cb of this.listeners[event]) {
+                try {
+                    cb(data);
+                } catch (e) {
+                    console.error('[CVAT-QAQC] Listener error:', e);
+                }
+            }
+        }
+    }
+}
+
+
+    // ------------------------------------------
+    // File: src\core\size_clipboard.js
+    // ------------------------------------------
+
+/**
+ * Size Clipboard Module for CVAT 3D QA/QC Inspector
+ * Copies and Pastes bounding box dimensions (W: sx, L: sy, H: sz) across frames.
+ * Follows the mechanism of CVAT-prelabel-analysis:
+ * 1. In-memory clipboard
+ * 2. Persistent sessionStorage ('cvat_coof_dims' and 'cvat_qaqc_size_clipboard')
+ * 3. System Clipboard integration (formatted text and JSON)
+ * 4. Pure UI operation in CVAT-QAQC: 0 HTTP requests, 0 buttons added to CVAT web page.
+ */
+class SizeClipboard {
+    static _memory = null;
+
+    /**
+     * Restore clipboard from sessionStorage on init
+     */
+    static init() {
+        try {
+            const saved = sessionStorage.getItem('cvat_qaqc_size_clipboard') || sessionStorage.getItem('cvat_coof_dims');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                this._memory = this.normalize(parsed);
+            }
+        } catch (_) {}
+    }
+
+    /**
+     * Normalize any size object into { sx, sy, sz, w, l, h }
+     * @param {Object} obj - { sx, sy, sz } or { w, l, h }
+     */
+    static normalize(obj) {
+        if (!obj || typeof obj !== 'object') return null;
+
+        const w = Number(obj.sx ?? obj.w ?? 0);
+        const l = Number(obj.sy ?? obj.l ?? 0);
+        const h = Number(obj.sz ?? obj.h ?? 0);
+
+        if (isNaN(w) || isNaN(l) || isNaN(h) || w <= 0 || l <= 0 || h <= 0) {
+            return null;
+        }
+
+        const sx = parseFloat(w.toFixed(3));
+        const sy = parseFloat(l.toFixed(3));
+        const sz = parseFloat(h.toFixed(3));
+
+        return {
+            sx,
+            sy,
+            sz,
+            w: sx,
+            l: sy,
+            h: sz,
+            copiedAt: Date.now()
+        };
+    }
+
+    /**
+     * Copy dimensions of a box to clipboard
+     * @param {Object} box - { sx, sy, sz }
+     * @returns {Object|null}
+     */
+    static copy(box) {
+        const normalized = this.normalize(box);
+        if (!normalized) return null;
+
+        this._memory = normalized;
+
+        // 1. Save to sessionStorage (supports cvat_coof_dims interoperability)
+        try {
+            sessionStorage.setItem('cvat_qaqc_size_clipboard', JSON.stringify(normalized));
+            sessionStorage.setItem('cvat_coof_dims', JSON.stringify({
+                l: normalized.sy,
+                w: normalized.sx,
+                h: normalized.sz
+            }));
+        } catch (_) {}
+
+        // 2. Write to system clipboard if permitted
+        try {
+            if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+                const text = `${normalized.sx} x ${normalized.sy} x ${normalized.sz}`;
+                navigator.clipboard.writeText(text).catch(() => {});
+            }
+        } catch (_) {}
+
+        // 3. Dispatch custom event for UI updates
+        try {
+            if (typeof window !== 'undefined') {
+                window.dispatchEvent(new CustomEvent('cvat_qaqc_size_copied', {
+                    detail: normalized
+                }));
+            }
+        } catch (_) {}
+
+        return normalized;
+    }
+
+    /**
+     * Retrieve dimensions from memory, sessionStorage, or system clipboard
+     * @returns {Promise<Object|null>}
+     */
+    static async get() {
+        if (this._memory) return { ...this._memory };
+
+        try {
+            const raw = sessionStorage.getItem('cvat_qaqc_size_clipboard') || sessionStorage.getItem('cvat_coof_dims');
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                const norm = this.normalize(parsed);
+                if (norm) {
+                    this._memory = norm;
+                    return { ...norm };
+                }
+            }
+        } catch (_) {}
+
+        // Try reading from system clipboard as fallback
+        try {
+            if (typeof navigator !== 'undefined' && navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                const text = await navigator.clipboard.readText();
+                if (text && typeof text === 'string') {
+                    // Try JSON parse
+                    try {
+                        const json = JSON.parse(text);
+                        const norm = this.normalize(json);
+                        if (norm) {
+                            this._memory = norm;
+                            return { ...norm };
+                        }
+                    } catch (_) {}
+
+                    // Try regex parse "1.85 x 4.52 x 1.55" or "1.85, 4.52, 1.55"
+                    const match = text.match(/([0-9]+(?:\.[0-9]+)?)\s*[\*x×,; ]\s*([0-9]+(?:\.[0-9]+)?)\s*[\*x×,; ]\s*([0-9]+(?:\.[0-9]+)?)/i);
+                    if (match) {
+                        const v1 = parseFloat(match[1]);
+                        const v2 = parseFloat(match[2]);
+                        const v3 = parseFloat(match[3]);
+                        const norm = this.normalize({ sx: v1, sy: v2, sz: v3 });
+                        if (norm) {
+                            this._memory = norm;
+                            return { ...norm };
+                        }
+                    }
+                }
+            }
+        } catch (_) {}
+
+        return null;
+    }
+
+    /**
+     * Check synchronously if clipboard has data
+     */
+    static hasData() {
+        if (this._memory) return true;
+        try {
+            return Boolean(sessionStorage.getItem('cvat_qaqc_size_clipboard') || sessionStorage.getItem('cvat_coof_dims'));
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /**
+     * Extract active cuboid dimensions from CVAT HTML DOM (pure read-only inspection)
+     * Does NOT create or inject any buttons into CVAT.
+     */
+    static extractFromCvatDom() {
+        try {
+            const sizeRow = document.querySelector('.cvat-objects-sidebar-state-active .cvat-objects-sidebar-size-params') ||
+                            document.querySelector('.cvat-canvas-3d-cuboid-popover .cvat-objects-sidebar-size-params') ||
+                            document.querySelector('.cvat-objects-sidebar-size-params');
+
+            let l = null, w = null, h = null;
+
+            if (sizeRow) {
+                const cols = sizeRow.querySelectorAll('.ant-col');
+                for (const col of cols) {
+                    const text = (col.textContent || '').trim().toUpperCase();
+                    const input = col.querySelector('input');
+                    if (!input) continue;
+                    const val = parseFloat(input.value);
+                    if (isNaN(val) || val <= 0) continue;
+
+                    if (text.startsWith('L') || text.includes('L:')) l = val;
+                    else if (text.startsWith('W') || text.includes('W:')) w = val;
+                    else if (text.startsWith('H') || text.includes('H:')) h = val;
+                }
+            }
+
+            if (w !== null && l !== null && h !== null) {
+                return this.normalize({ sx: w, sy: l, sz: h });
+            }
+        } catch (_) {}
+
+        return null;
+    }
+}
+
+SizeClipboard.init();
+
+
+    // ------------------------------------------
+    // File: src\ui\frame_card.js
+    // ------------------------------------------
+
+/**
+ * Frame Card Component for Multi-frame QA/QC
+ * Renders Top, Side, Front views in the exact convention and order of CVAT.
+ * Compact display allowing multiple frames to be visible simultaneously.
+ */
+class FrameCard {
+    /**
+     * @param {Object} data - { frame, points, box, keyframe, outside, label }
+     * @param {Function} onSelectFrame - callback when clicked to jump
+     * @param {Function} [onUpdateCuboid] - callback when user edits cuboid (frame, newPoints, newBox)
+     * @param {Function} [onPasteSizeToAll] - callback when user chooses to paste size to all frames
+     */
+    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll) {
+        this.data = data;
+        this.frame = data.frame;
+        this.onSelectFrame = onSelectFrame;
+        this.onUpdateCuboid = onUpdateCuboid;
+        this.onPasteSizeToAll = onPasteSizeToAll;
+
+        // Keep deep copy of original state for reset capability
+        this.originalBox = { ...(data.box || {}) };
+        this.originalPoints = Array.isArray(data.points) ? [...data.points] : [];
+
+        this.canvases = {};
+        this.lastPointCloudData = null;
+        this.lastRenderOptions = null;
+        this.isCurrent = false;
+
+        this.valDisplays = {};
+        this.dragState = null;
+        this.hoverState = null;
+        this.rafPending = false;
+
+        this.dom = this.createDOM();
+    }
+
+    createDOM() {
+        const card = document.createElement('div');
+        card.className = 'cvat-qaqc-card';
+        card.dataset.frame = String(this.frame);
+
+        // 1. Header Bar (Compact 24px)
+        const header = document.createElement('div');
+        header.className = 'cvat-qaqc-card-header';
+
+        const leftGroup = document.createElement('div');
+        leftGroup.className = 'cvat-qaqc-card-left-group';
+
+        const title = document.createElement('div');
+        title.className = 'cvat-qaqc-card-title';
+        const frameSpan = document.createElement('span');
+        frameSpan.textContent = `Frame ${this.frame}`;
+        title.appendChild(frameSpan);
+
+        if (this.data.keyframe) {
+            const kfBadge = document.createElement('span');
+            kfBadge.className = 'cvat-qaqc-keyframe-badge';
+            kfBadge.textContent = 'Keyframe';
+            title.appendChild(kfBadge);
+        }
+
+        const currentBadge = document.createElement('span');
+        currentBadge.className = 'cvat-qaqc-current-badge';
+        currentBadge.style.display = 'none';
+        currentBadge.textContent = 'Active';
+        this.currentBadge = currentBadge;
+
+        // Angle & Dimension Badges
+        const yawBadge = document.createElement('span');
+        yawBadge.className = 'cvat-qaqc-yaw-badge';
+        this.yawBadge = yawBadge;
+
+        const dimBadge = document.createElement('span');
+        dimBadge.className = 'cvat-qaqc-dim-badge';
+        this.dimBadge = dimBadge;
+
+        this.updateHeaderBadges();
+
+        leftGroup.appendChild(title);
+        leftGroup.appendChild(currentBadge);
+        leftGroup.appendChild(yawBadge);
+        leftGroup.appendChild(dimBadge);
+
+        // Header Actions (Right Group)
+        const rightGroup = document.createElement('div');
+        rightGroup.className = 'cvat-qaqc-card-right-group';
+
+        // Copy Size Button (Compact)
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-copy-size-btn';
+        copyBtn.textContent = '📋 Copy';
+        copyBtn.title = `Sao chép kích thước (${this.data.box?.sx} × ${this.data.box?.sy} × ${this.data.box?.sz}m) vào clipboard`;
+        copyBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.handleCopySize(copyBtn);
+        });
+
+        // Paste Size Button (Compact)
+        const pasteBtn = document.createElement('button');
+        pasteBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-paste-size-btn';
+        pasteBtn.textContent = '📄 Paste';
+        pasteBtn.title = 'Dán kích thước từ clipboard vào cuboid trên frame này';
+        pasteBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await this.handlePasteSize(pasteBtn);
+        });
+
+        // Edit Drawer Toggle Button
+        const editToggleBtn = document.createElement('button');
+        editToggleBtn.className = 'cvat-qaqc-edit-toggle-btn';
+        editToggleBtn.textContent = '✎ Sửa / Edit';
+        editToggleBtn.title = 'Chỉnh sửa vị trí, kích thước, góc quay của cuboid trên frame này';
+        editToggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleEditPanel();
+        });
+        this.editToggleBtn = editToggleBtn;
+
+        // Jump Button
+        const jumpBtn = document.createElement('button');
+        jumpBtn.className = 'cvat-qaqc-jump-btn';
+        jumpBtn.textContent = '↗ Nhảy / Jump';
+        jumpBtn.title = `Chuyển vùng nhìn CVAT đến Frame ${this.frame}`;
+        jumpBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.triggerJump();
+        });
+
+        rightGroup.appendChild(copyBtn);
+        rightGroup.appendChild(pasteBtn);
+        rightGroup.appendChild(editToggleBtn);
+        rightGroup.appendChild(jumpBtn);
+
+        header.appendChild(leftGroup);
+        header.appendChild(rightGroup);
+
+        header.addEventListener('click', () => {
+            this.triggerJump();
+        });
+
+        // 2. Views Grid: CVAT standard order: Top, Side, Front
+        const grid = document.createElement('div');
+        grid.className = 'cvat-qaqc-views-grid';
+        this.grid = grid;
+
+        const views = [
+            { id: 'top', label: 'Top' },
+            { id: 'side', label: 'Side' },
+            { id: 'front', label: 'Front' }
+        ];
+
+        for (const { id: viewType, label } of views) {
+            const cell = document.createElement('div');
+            cell.className = `cvat-qaqc-view-cell cell-${viewType}`;
+
+            // CVAT-style Header Strip for each view
+            const cellHeader = document.createElement('div');
+            cellHeader.className = 'cvat-qaqc-cell-header';
+            cellHeader.textContent = label;
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 220;
+            canvas.height = 110;
+            this.canvases[viewType] = canvas;
+
+            this.setupCanvasInteractions(canvas, viewType);
+
+            cell.appendChild(cellHeader);
+            cell.appendChild(canvas);
+            grid.appendChild(cell);
+        }
+
+        // 3. In-Place Edit Panel (Collapsible)
+        const editPanel = this.createEditPanel();
+        this.editPanelEl = editPanel;
+
+        card.appendChild(header);
+        card.appendChild(grid);
+        card.appendChild(editPanel);
+
+        return card;
+    }
+
+    /**
+     * Build interactive in-place editing panel adhering to macOS HIG
+     */
+    createEditPanel() {
+        const panel = document.createElement('div');
+        panel.className = 'cvat-qaqc-edit-panel';
+        panel.style.display = 'none';
+
+        panel.addEventListener('click', (e) => e.stopPropagation());
+
+        // Row 1: Position (Vị trí X, Y, Z)
+        const posRow = document.createElement('div');
+        posRow.className = 'cvat-qaqc-edit-row';
+
+        const posLabel = document.createElement('div');
+        posLabel.className = 'cvat-qaqc-edit-label';
+        posLabel.textContent = 'Vị trí / Pos';
+
+        const posControls = document.createElement('div');
+        posControls.className = 'cvat-qaqc-edit-controls';
+
+        posControls.appendChild(this.createStepper('X', 'x', 0.05, 'm'));
+        posControls.appendChild(this.createStepper('Y', 'y', 0.05, 'm'));
+        posControls.appendChild(this.createStepper('Z', 'z', 0.05, 'm'));
+
+        posRow.appendChild(posLabel);
+        posRow.appendChild(posControls);
+
+        // Row 2: Dimensions (Kích thước W, L, H)
+        const sizeRow = document.createElement('div');
+        sizeRow.className = 'cvat-qaqc-edit-row';
+
+        const sizeLabel = document.createElement('div');
+        sizeLabel.className = 'cvat-qaqc-edit-label';
+        sizeLabel.textContent = 'Kích thước';
+
+        const sizeControls = document.createElement('div');
+        sizeControls.className = 'cvat-qaqc-edit-controls';
+
+        sizeControls.appendChild(this.createStepper('W (X)', 'sx', 0.05, 'm', 0.1));
+        sizeControls.appendChild(this.createStepper('L (Y)', 'sy', 0.05, 'm', 0.1));
+        sizeControls.appendChild(this.createStepper('H (Z)', 'sz', 0.05, 'm', 0.1));
+
+        // Copy / Paste Size buttons in edit row
+        const sizeCopyBtn = document.createElement('button');
+        sizeCopyBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-copy-size-btn';
+        sizeCopyBtn.textContent = '📋 Copy';
+        sizeCopyBtn.title = 'Sao chép kích thước WxLxH của frame này vào clipboard';
+        sizeCopyBtn.addEventListener('click', () => this.handleCopySize(sizeCopyBtn));
+
+        const sizePasteBtn = document.createElement('button');
+        sizePasteBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-paste-size-btn';
+        sizePasteBtn.textContent = '📄 Paste';
+        sizePasteBtn.title = 'Dán kích thước từ clipboard vào frame này';
+        sizePasteBtn.addEventListener('click', () => this.handlePasteSize(sizePasteBtn));
+
+        sizeControls.appendChild(sizeCopyBtn);
+        sizeControls.appendChild(sizePasteBtn);
+
+        sizeRow.appendChild(sizeLabel);
+        sizeRow.appendChild(sizeControls);
+
+        // Row 3: Rotation / Yaw (Quay góc Yaw)
+        const rotRow = document.createElement('div');
+        rotRow.className = 'cvat-qaqc-edit-row';
+
+        const rotLabel = document.createElement('div');
+        rotLabel.className = 'cvat-qaqc-edit-label';
+        rotLabel.textContent = 'Góc quay / Yaw';
+
+        const rotControls = document.createElement('div');
+        rotControls.className = 'cvat-qaqc-edit-controls';
+
+        const yawVal = document.createElement('span');
+        yawVal.className = 'cvat-qaqc-yaw-val-text';
+        this.valDisplays['yaw'] = yawVal;
+        this.updateYawDisplay();
+
+        const rCoarseMinus = this.createAngleBtn('↺ -5°', -5 * Math.PI / 180);
+        const rFineMinus = this.createAngleBtn('↺ -1°', -1 * Math.PI / 180);
+        const rFinePlus = this.createAngleBtn('↻ +1°', 1 * Math.PI / 180);
+        const rCoarsePlus = this.createAngleBtn('↻ +5°', 5 * Math.PI / 180);
+        const rFlip180 = this.createAngleBtn('⟲ Đảo 180°', Math.PI, 'Đảo ngược hướng đầu xe 180° (Flip Heading)');
+
+        rotControls.appendChild(yawVal);
+        rotControls.appendChild(rCoarseMinus);
+        rotControls.appendChild(rFineMinus);
+        rotControls.appendChild(rFinePlus);
+        rotControls.appendChild(rCoarsePlus);
+        rotControls.appendChild(rFlip180);
+
+        rotRow.appendChild(rotLabel);
+        rotRow.appendChild(rotControls);
+
+        // Row 4: Status & Quick Actions
+        const footerRow = document.createElement('div');
+        footerRow.className = 'cvat-qaqc-edit-footer';
+
+        const statusNote = document.createElement('span');
+        statusNote.className = 'cvat-qaqc-edit-status-note';
+        statusNote.textContent = '● Lưu vào bộ nhớ CVAT (0 request)';
+        this.statusNote = statusNote;
+
+        const pasteAllBtn = document.createElement('button');
+        pasteAllBtn.className = 'cvat-qaqc-paste-all-btn';
+        pasteAllBtn.textContent = '📄 Dán cho TẤT CẢ frame / Paste All';
+        pasteAllBtn.title = 'Áp dụng kích thước hiện tại cho mọi frame của đối tượng này';
+        pasteAllBtn.addEventListener('click', () => this.handlePasteSizeToAll(pasteAllBtn));
+
+        const resetBtn = document.createElement('button');
+        resetBtn.className = 'cvat-qaqc-reset-btn';
+        resetBtn.textContent = '↺ Hoàn tác / Reset';
+        resetBtn.title = 'Khôi phục lại kích thước và góc ban đầu của frame này';
+        resetBtn.addEventListener('click', () => this.resetToOriginal());
+
+        footerRow.appendChild(statusNote);
+        footerRow.appendChild(pasteAllBtn);
+        footerRow.appendChild(resetBtn);
+
+        panel.appendChild(posRow);
+        panel.appendChild(sizeRow);
+        panel.appendChild(rotRow);
+        panel.appendChild(footerRow);
+
+        return panel;
+    }
+
+    /**
+     * Create stepper control [-] [Value] [+]
+     */
+    createStepper(label, propKey, step = 0.05, unit = 'm', minVal = -Infinity) {
+        const stepper = document.createElement('div');
+        stepper.className = 'cvat-qaqc-stepper';
+
+        const decBtn = document.createElement('button');
+        decBtn.className = 'cvat-qaqc-step-btn';
+        decBtn.textContent = '−';
+        decBtn.title = `Giảm ${label} (Shift: x5)`;
+        decBtn.addEventListener('click', (e) => {
+            const actualStep = e.shiftKey ? step * 5 : step;
+            this.adjustProp(propKey, -actualStep, minVal);
+        });
+
+        const valSpan = document.createElement('span');
+        valSpan.className = 'cvat-qaqc-step-val';
+        this.valDisplays[propKey] = { el: valSpan, label, unit };
+        this.updateStepDisplay(propKey);
+
+        const incBtn = document.createElement('button');
+        incBtn.className = 'cvat-qaqc-step-btn';
+        incBtn.textContent = '+';
+        incBtn.title = `Tăng ${label} (Shift: x5)`;
+        incBtn.addEventListener('click', (e) => {
+            const actualStep = e.shiftKey ? step * 5 : step;
+            this.adjustProp(propKey, actualStep, minVal);
+        });
+
+        stepper.appendChild(decBtn);
+        stepper.appendChild(valSpan);
+        stepper.appendChild(incBtn);
+
+        return stepper;
+    }
+
+    /**
+     * Create button to add/subtract angle
+     */
+    createAngleBtn(text, deltaRad, title) {
+        const btn = document.createElement('button');
+        btn.className = 'cvat-qaqc-rot-btn';
+        btn.textContent = text;
+        if (title) btn.title = title;
+        btn.addEventListener('click', () => {
+            this.adjustRotation(deltaRad);
+        });
+        return btn;
+    }
+
+    adjustProp(propKey, delta, minVal = -Infinity) {
+        if (!this.data.box) this.data.box = {};
+        const current = typeof this.data.box[propKey] === 'number' ? this.data.box[propKey] : 0;
+        const nextVal = Math.max(minVal, current + delta);
+        this.data.box[propKey] = parseFloat(nextVal.toFixed(3));
+
+        this.applyBoxChanges();
+        this.updateStepDisplay(propKey);
+    }
+
+    adjustRotation(deltaRad) {
+        if (!this.data.box) this.data.box = {};
+        const current = typeof this.data.box.rz === 'number' ? this.data.box.rz : 0;
+        let nextRz = current + deltaRad;
+
+        while (nextRz > Math.PI) nextRz -= Math.PI * 2;
+        while (nextRz < -Math.PI) nextRz += Math.PI * 2;
+
+        this.data.box.rz = parseFloat(nextRz.toFixed(4));
+
+        this.applyBoxChanges();
+        this.updateYawDisplay();
+    }
+
+    applyBoxChanges() {
+        this.data.points = TrackReader.boxToPoints(this.data.box, this.data.points);
+
+        if (this.lastPointCloudData && this.lastRenderOptions) {
+            this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
+        }
+
+        this.updateHeaderBadges();
+        this.flashStatus('● Đã cập nhật bộ nhớ CVAT');
+
+        if (typeof this.onUpdateCuboid === 'function') {
+            this.onUpdateCuboid(this.frame, this.data.points, this.data.box);
+        }
+    }
+
+    resetToOriginal() {
+        this.data.box = { ...this.originalBox };
+        this.data.points = [...this.originalPoints];
+
+        for (const k of ['x', 'y', 'z', 'sx', 'sy', 'sz']) {
+            this.updateStepDisplay(k);
+        }
+        this.updateYawDisplay();
+        this.applyBoxChanges();
+        this.flashStatus('● Đã khôi phục ban đầu');
+    }
+
+    /**
+     * Seamlessly update card data and views without rebuilding DOM
+     * Used when an Undo, Redo, or external CVAT edit occurs
+     * @param {Object} newData - { frame, points, box, keyframe, outside, label }
+     */
+    updateData(newData) {
+        if (!newData) return;
+        this.data = newData;
+        this.frame = newData.frame;
+
+        this.updateHeaderBadges();
+
+        for (const k of ['x', 'y', 'z', 'sx', 'sy', 'sz']) {
+            this.updateStepDisplay(k);
+        }
+        this.updateYawDisplay();
+
+        // Re-render views with existing point cloud data & options
+        if (this.lastPointCloudData && this.lastRenderOptions) {
+            this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
+        } else {
+            this.renderViews(null, this.isCurrent, this.lastRenderOptions || {
+                viewMode: 'all',
+                zoom: 1.0,
+                pointSize: 1.5
+            });
+        }
+    }
+
+    /**
+     * Copy dimensions of this frame's cuboid into clipboard
+     */
+    handleCopySize(btn) {
+        if (!this.data.box) return;
+        const res = SizeClipboard.copy(this.data.box);
+        if (!res) return;
+
+        if (btn) {
+            const origHTML = btn.innerHTML;
+            btn.classList.add('success-flash');
+            btn.innerHTML = '✓ Đã Copy!';
+            setTimeout(() => {
+                btn.classList.remove('success-flash');
+                btn.innerHTML = origHTML;
+            }, 1200);
+        }
+
+        this.flashStatus(`● Đã copy size: ${res.sx} × ${res.sy} × ${res.sz}m`);
+    }
+
+    /**
+     * Paste dimensions from clipboard into this frame's cuboid
+     */
+    async handlePasteSize(btn) {
+        const size = await SizeClipboard.get();
+        if (!size) {
+            this.flashStatus('⚠️ Chưa có size! Bấm Copy trước.');
+            return;
+        }
+
+        const success = this.pasteSize(size);
+        if (success && btn) {
+            const origHTML = btn.innerHTML;
+            btn.classList.add('success-flash');
+            btn.innerHTML = '✓ Đã Dán!';
+            setTimeout(() => {
+                btn.classList.remove('success-flash');
+                btn.innerHTML = origHTML;
+            }, 1200);
+        }
+    }
+
+    /**
+     * Apply dimensions to this frame's box in-memory (0 server requests)
+     * @param {Object} sizeObj - { sx, sy, sz } or { w, l, h }
+     */
+    pasteSize(sizeObj) {
+        if (!sizeObj) return false;
+        const sx = Number(sizeObj.sx ?? sizeObj.w);
+        const sy = Number(sizeObj.sy ?? sizeObj.l);
+        const sz = Number(sizeObj.sz ?? sizeObj.h);
+
+        if (isNaN(sx) || isNaN(sy) || isNaN(sz) || sx <= 0 || sy <= 0 || sz <= 0) {
+            return false;
+        }
+
+        if (!this.data.box) this.data.box = {};
+        this.data.box.sx = parseFloat(sx.toFixed(3));
+        this.data.box.sy = parseFloat(sy.toFixed(3));
+        this.data.box.sz = parseFloat(sz.toFixed(3));
+
+        for (const k of ['sx', 'sy', 'sz']) {
+            this.updateStepDisplay(k);
+        }
+        this.applyBoxChanges();
+        this.flashStatus(`● Đã dán size: ${this.data.box.sx} × ${this.data.box.sy} × ${this.data.box.sz}m`);
+        return true;
+    }
+
+    /**
+     * Paste current frame dimensions to ALL loaded frames of this track
+     */
+    async handlePasteSizeToAll(btn) {
+        let size = await SizeClipboard.get();
+        if (!size && this.data.box) {
+            size = SizeClipboard.copy(this.data.box);
+        }
+        if (!size) {
+            this.flashStatus('⚠️ Không có kích thước để dán!');
+            return;
+        }
+
+        if (typeof this.onPasteSizeToAll === 'function') {
+            this.onPasteSizeToAll(size);
+        } else {
+            this.pasteSize(size);
+        }
+
+        if (btn) {
+            const origHTML = btn.innerHTML;
+            btn.classList.add('success-flash');
+            btn.innerHTML = '✓ Đã dán tất cả!';
+            setTimeout(() => {
+                btn.classList.remove('success-flash');
+                btn.innerHTML = origHTML;
+            }, 1400);
+        }
+    }
+
+    flashStatus(text) {
+        if (this.statusNote) {
+            this.statusNote.textContent = text;
+            this.statusNote.classList.add('flash');
+            setTimeout(() => {
+                this.statusNote.classList.remove('flash');
+                this.statusNote.textContent = '● Lưu vào bộ nhớ CVAT (0 request)';
+            }, 2000);
+        }
+    }
+
+    updateStepDisplay(propKey) {
+        const item = this.valDisplays[propKey];
+        if (!item || !item.el) return;
+        const val = this.data.box?.[propKey] ?? 0;
+        item.el.textContent = `${item.label}: ${val.toFixed(2)}${item.unit}`;
+    }
+
+    updateYawDisplay() {
+        const el = this.valDisplays['yaw'];
+        if (!el) return;
+        const rz = this.data.box?.rz ?? 0;
+        const deg = ((rz * 180 / Math.PI) % 360).toFixed(1);
+        el.textContent = `θ: ${deg}°`;
+    }
+
+    updateHeaderBadges() {
+        const { box } = this.data;
+        if (!box) return;
+
+        if (this.yawBadge) {
+            const rz = box.rz ?? 0;
+            const deg = ((rz * 180 / Math.PI) % 360).toFixed(1);
+            this.yawBadge.textContent = `Yaw: ${deg}°`;
+        }
+
+        if (this.dimBadge) {
+            const { sx = 2, sy = 4, sz = 1.5 } = box;
+            this.dimBadge.textContent = `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
+        }
+    }
+
+    toggleEditPanel() {
+        const isOpen = this.editPanelEl.style.display !== 'none';
+        if (isOpen) {
+            this.editPanelEl.style.display = 'none';
+            this.editToggleBtn.classList.remove('active');
+        } else {
+            this.editPanelEl.style.display = 'flex';
+            this.editToggleBtn.classList.add('active');
+        }
+    }
+
+    triggerJump() {
+        this.dom.classList.add('jumping');
+        setTimeout(() => this.dom.classList.remove('jumping'), 300);
+
+        if (typeof this.onSelectFrame === 'function') {
+            this.onSelectFrame(this.frame);
+        }
+    }
+
+    /**
+     * Set up smooth direct manipulation (rotate like CVAT, translate, 4-corner resize) on canvas
+     * @param {HTMLCanvasElement} canvas
+     * @param {'top'|'side'|'front'} viewType
+     */
+    setupCanvasInteractions(canvas, viewType) {
+        canvas.style.touchAction = 'none';
+
+        const OPPOSITE_CORNER = {
+            tl: 'br',
+            tr: 'bl',
+            bl: 'tr',
+            br: 'tl'
+        };
+
+        const getCanvasPos = (e) => {
+            const rect = canvas.getBoundingClientRect();
+            return {
+                x: e.clientX - rect.left,
+                y: e.clientY - rect.top
+            };
+        };
+
+        const detectActionAtPos = (pos, metrics) => {
+            if (!this.data.box) return null;
+
+            // 1. Heading rotation helper (Top view only - green circle dot on forward stem)
+            if (viewType === 'top') {
+                const distToDot = Math.hypot(pos.x - metrics.rotDotX, pos.y - metrics.rotDotY);
+                if (distToDot <= 12) {
+                    return { action: 'rotate', target: 'rotate' };
+                }
+            }
+
+            // 2. CVAT 4 Red Corner Handles (diagonally opposite vertex remains anchored)
+            if (metrics.corners) {
+                for (const [key, pt] of Object.entries(metrics.corners)) {
+                    const dist = Math.hypot(pos.x - pt.x, pos.y - pt.y);
+                    if (dist <= 12) {
+                        return { action: 'resize-corner', cornerKey: key, target: `corner-${key}` };
+                    }
+                }
+            }
+
+            // 3. Fallback: Near edges for single-edge resizing (6px tolerance)
+            const tol = 6;
+            const inYRange = pos.y >= metrics.boxTop - tol && pos.y <= metrics.boxBottom + tol;
+            const inXRange = pos.x >= metrics.boxLeft - tol && pos.x <= metrics.boxRight + tol;
+
+            if (inYRange) {
+                if (Math.abs(pos.x - metrics.boxLeft) <= tol) return { action: 'resize-left', target: 'edge-left' };
+                if (Math.abs(pos.x - metrics.boxRight) <= tol) return { action: 'resize-right', target: 'edge-right' };
+            }
+            if (inXRange) {
+                if (Math.abs(pos.y - metrics.boxTop) <= tol) return { action: 'resize-top', target: 'edge-top' };
+                if (Math.abs(pos.y - metrics.boxBottom) <= tol) return { action: 'resize-bottom', target: 'edge-bottom' };
+            }
+
+            // 4. Inside box for translation (drag)
+            if (pos.x > metrics.boxLeft && pos.x < metrics.boxRight &&
+                pos.y > metrics.boxTop && pos.y < metrics.boxBottom) {
+                return { action: 'translate', target: 'box' };
+            }
+
+            return null;
+        };
+
+        canvas.addEventListener('pointerenter', () => {
+            this.hoverState = { viewType, target: null };
+        });
+
+        canvas.addEventListener('pointerleave', () => {
+            if (!this.dragState) {
+                this.hoverState = null;
+                canvas.style.cursor = 'default';
+                this.requestRender();
+            }
+        });
+
+        canvas.addEventListener('pointermove', (e) => {
+            const pos = getCanvasPos(e);
+            const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);
+
+            if (!this.dragState) {
+                const hit = detectActionAtPos(pos, metrics);
+                const target = hit?.target || null;
+                const prevTarget = this.hoverState?.target;
+                this.hoverState = { viewType, target, cornerKey: hit?.cornerKey || null };
+
+                if (target === 'rotate') {
+                    canvas.style.cursor = 'crosshair';
+                } else if (target === 'corner-tl' || target === 'corner-br') {
+                    canvas.style.cursor = 'nwse-resize';
+                } else if (target === 'corner-tr' || target === 'corner-bl') {
+                    canvas.style.cursor = 'nesw-resize';
+                } else if (target === 'edge-left' || target === 'edge-right') {
+                    canvas.style.cursor = 'ew-resize';
+                } else if (target === 'edge-top' || target === 'edge-bottom') {
+                    canvas.style.cursor = 'ns-resize';
+                } else if (target === 'box') {
+                    canvas.style.cursor = 'grab';
+                } else {
+                    canvas.style.cursor = 'default';
+                }
+
+                if (target !== prevTarget) {
+                    this.requestRender();
+                }
+                return;
+            }
+
+            if (this.dragState.pointerId !== e.pointerId) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            this.dragState.hasMoved = true;
+            const { action } = this.dragState;
+
+            if (action === 'rotate') {
+                const currAngle = Math.atan2(this.dragState.initialMetrics.centerY - pos.y, pos.x - this.dragState.initialMetrics.centerX);
+                let dAngle = currAngle - this.dragState.lastAngle;
+                while (dAngle > Math.PI) dAngle -= Math.PI * 2;
+                while (dAngle < -Math.PI) dAngle += Math.PI * 2;
+
+                this.dragState.lastAngle = currAngle;
+                let nextRz = (this.data.box.rz || 0) + dAngle;
+                while (nextRz > Math.PI) nextRz -= Math.PI * 2;
+                while (nextRz < -Math.PI) nextRz += Math.PI * 2;
+                this.data.box.rz = parseFloat(nextRz.toFixed(4));
+            } else if (action === 'translate') {
+                const dxPx = pos.x - this.dragState.lastX;
+                const dyPx = pos.y - this.dragState.lastY;
+                this.dragState.lastX = pos.x;
+                this.dragState.lastY = pos.y;
+
+                const scale = metrics.scale;
+                const d_h = dxPx / scale;
+                const d_v = -dyPx / scale;
+                const rz = this.data.box.rz || 0;
+
+                let d_lx = 0, d_ly = 0, d_lz = 0;
+                if (viewType === 'top') {
+                    d_lx = d_h;
+                    d_ly = d_v;
+                } else if (viewType === 'side') {
+                    d_ly = d_h;
+                    d_lz = d_v;
+                } else if (viewType === 'front') {
+                    d_lx = d_h;
+                    d_lz = d_v;
+                }
+
+                const d_wx = d_lx * Math.cos(rz) - d_ly * Math.sin(rz);
+                const d_wy = d_lx * Math.sin(rz) + d_ly * Math.cos(rz);
+                const d_wz = d_lz;
+
+                this.data.box.x = parseFloat(((this.data.box.x || 0) + d_wx).toFixed(3));
+                this.data.box.y = parseFloat(((this.data.box.y || 0) + d_wy).toFixed(3));
+                this.data.box.z = parseFloat(((this.data.box.z || 0) + d_wz).toFixed(3));
+            } else if (action === 'resize-corner') {
+                // Authentic CVAT 4-corner resizing with fixed opposite corner anchor
+                const {
+                    signU, signV, oppLocalU, oppLocalV,
+                    initialBox, initialMetrics
+                } = this.dragState;
+
+                const u_cur = (pos.x - initialMetrics.centerX) / initialMetrics.scale;
+                const v_cur = (initialMetrics.centerY - pos.y) / initialMetrics.scale;
+                const minDim = 0.15;
+
+                const rawDimH = (u_cur - oppLocalU) * signU;
+                const newDimH = Math.max(minDim, rawDimH);
+                const u_clamped = oppLocalU + signU * newDimH;
+
+                const rawDimV = (v_cur - oppLocalV) * signV;
+                const newDimV = Math.max(minDim, rawDimV);
+                const v_clamped = oppLocalV + signV * newDimV;
+
+                // Midpoint between fixed opposite corner and clamped dragged corner
+                const u_mid = (oppLocalU + u_clamped) / 2;
+                const v_mid = (oppLocalV + v_clamped) / 2;
+
+                const rz0 = initialBox.rz || 0;
+                let d_lx = 0, d_ly = 0, d_lz = 0;
+                let nextSx = initialBox.sx || 2;
+                let nextSy = initialBox.sy || 4;
+                let nextSz = initialBox.sz || 1.5;
+
+                if (viewType === 'top') {
+                    d_lx = u_mid;
+                    d_ly = v_mid;
+                    nextSx = newDimH;
+                    nextSy = newDimV;
+                } else if (viewType === 'side') {
+                    d_ly = u_mid;
+                    d_lz = v_mid;
+                    nextSy = newDimH;
+                    nextSz = newDimV;
+                } else if (viewType === 'front') {
+                    d_lx = u_mid;
+                    d_lz = v_mid;
+                    nextSx = newDimH;
+                    nextSz = newDimV;
+                }
+
+                const d_wx = d_lx * Math.cos(rz0) - d_ly * Math.sin(rz0);
+                const d_wy = d_lx * Math.sin(rz0) + d_ly * Math.cos(rz0);
+                const d_wz = d_lz;
+
+                this.data.box.x = parseFloat(((initialBox.x || 0) + d_wx).toFixed(3));
+                this.data.box.y = parseFloat(((initialBox.y || 0) + d_wy).toFixed(3));
+                this.data.box.z = parseFloat(((initialBox.z || 0) + d_wz).toFixed(3));
+                this.data.box.sx = parseFloat(nextSx.toFixed(3));
+                this.data.box.sy = parseFloat(nextSy.toFixed(3));
+                this.data.box.sz = parseFloat(nextSz.toFixed(3));
+            } else if (action.startsWith('resize-')) {
+                // Fallback single-edge resizing
+                const dxPx = pos.x - this.dragState.lastX;
+                const dyPx = pos.y - this.dragState.lastY;
+                this.dragState.lastX = pos.x;
+                this.dragState.lastY = pos.y;
+
+                const scale = metrics.scale;
+                if (action === 'resize-left' || action === 'resize-right') {
+                    const sign = action === 'resize-right' ? 1 : -1;
+                    const deltaM = (dxPx / scale) * sign;
+                    if (viewType === 'top' || viewType === 'front') {
+                        this.data.box.sx = Math.max(0.15, parseFloat(((this.data.box.sx || 1) + deltaM).toFixed(3)));
+                    } else if (viewType === 'side') {
+                        this.data.box.sy = Math.max(0.15, parseFloat(((this.data.box.sy || 1) + deltaM).toFixed(3)));
+                    }
+                } else if (action === 'resize-top' || action === 'resize-bottom') {
+                    const sign = action === 'resize-bottom' ? 1 : -1;
+                    const deltaM = (dyPx / scale) * sign;
+                    if (viewType === 'top') {
+                        this.data.box.sy = Math.max(0.15, parseFloat(((this.data.box.sy || 1) - deltaM).toFixed(3)));
+                    } else if (viewType === 'side' || viewType === 'front') {
+                        this.data.box.sz = Math.max(0.15, parseFloat(((this.data.box.sz || 1) - deltaM).toFixed(3)));
+                    }
+                }
+            }
+
+            this.requestRender();
+        });
+
+        canvas.addEventListener('pointerdown', (e) => {
+            if (e.button !== 0) return; // Only primary mouse button
+
+            const pos = getCanvasPos(e);
+            const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);
+            const hit = detectActionAtPos(pos, metrics);
+
+            if (!hit) return;
+
+            e.preventDefault();
+            e.stopPropagation();
+
+            try {
+                canvas.setPointerCapture(e.pointerId);
+            } catch (_) {}
+
+            const action = hit.action;
+            const cornerKey = hit.cornerKey || null;
+            const oppKey = cornerKey ? OPPOSITE_CORNER[cornerKey] : null;
+
+            if (action === 'translate') {
+                canvas.style.cursor = 'grabbing';
+            } else if (action === 'rotate') {
+                canvas.style.cursor = 'crosshair';
+            } else if (action === 'resize-corner') {
+                canvas.style.cursor = (cornerKey === 'tl' || cornerKey === 'br') ? 'nwse-resize' : 'nesw-resize';
+            }
+
+            const initialBox = { ...(this.data.box || {}) };
+            const initialMetrics = { ...metrics };
+
+            let oppLocalU = 0;
+            let oppLocalV = 0;
+            let signU = 0;
+            let signV = 0;
+
+            if (action === 'resize-corner' && cornerKey) {
+                signU = (cornerKey === 'tr' || cornerKey === 'br') ? 1 : -1;
+                signV = (cornerKey === 'tl' || cornerKey === 'tr') ? 1 : -1;
+                oppLocalU = -signU * (metrics.dimH / 2);
+                oppLocalV = -signV * (metrics.dimV / 2);
+            }
+
+            this.dragState = {
+                pointerId: e.pointerId,
+                viewType,
+                action,
+                cornerKey,
+                oppositeCornerKey: oppKey,
+                signU,
+                signV,
+                oppLocalU,
+                oppLocalV,
+                initialBox,
+                initialMetrics,
+                startX: pos.x,
+                startY: pos.y,
+                lastX: pos.x,
+                lastY: pos.y,
+                lastAngle: Math.atan2(metrics.centerY - pos.y, pos.x - metrics.centerX),
+                hasMoved: false
+            };
+
+            this.requestRender();
+        });
+
+        const handlePointerUp = (e) => {
+            if (!this.dragState || this.dragState.pointerId !== e.pointerId) return;
+            e.preventDefault();
+            e.stopPropagation();
+
+            try {
+                canvas.releasePointerCapture(e.pointerId);
+            } catch (_) {}
+
+            const hadMoved = this.dragState.hasMoved;
+            this.dragState = null;
+            canvas.style.cursor = 'default';
+
+            if (hadMoved) {
+                this.applyBoxChanges();
+            } else {
+                this.requestRender();
+            }
+        };
+
+        canvas.addEventListener('pointerup', handlePointerUp);
+        canvas.addEventListener('pointercancel', handlePointerUp);
+    }
+
+    requestRender() {
+        if (this.rafPending) return;
+        this.rafPending = true;
+        requestAnimationFrame(() => {
+            this.rafPending = false;
+            const opts = {
+                ...(this.lastRenderOptions || {}),
+                interaction: {
+                    activeAction: this.dragState?.action || null,
+                    activeCornerKey: this.dragState?.cornerKey || null,
+                    oppositeCornerKey: this.dragState?.oppositeCornerKey || null,
+                    viewType: this.dragState?.viewType || null,
+                    hoverViewType: this.hoverState?.viewType || null,
+                    hoverTarget: this.hoverState?.target || null
+                }
+            };
+            this.renderViews(this.lastPointCloudData, this.isCurrent, opts);
+            this.updateHeaderBadges();
+            for (const k of ['x', 'y', 'z', 'sx', 'sy', 'sz']) {
+                this.updateStepDisplay(k);
+            }
+            this.updateYawDisplay();
+        });
+    }
+
+    /**
+     * Render or refresh canvas projections in CVAT order (Top, Side, Front)
+     * @param {{ positions: Float32Array, stride: number } | null} pointCloudData
+     * @param {boolean} isCurrentFrame
+     * @param {Object} options - { viewMode, zoom, pointSize, interaction }
+     */
+    renderViews(pointCloudData, isCurrentFrame, options = {}) {
+        this.lastPointCloudData = pointCloudData;
+        this.lastRenderOptions = options;
+        this.isCurrent = isCurrentFrame;
+
+        const { box, label } = this.data;
+        const color = label?.color || '#30D158';
+        const viewMode = options.viewMode || 'all'; // 'all', 'top', 'side', 'front'
+        const zoom = options.zoom || 1.0;
+        const pointSize = options.pointSize || 1.5;
+
+        // Active frame highlight
+        if (isCurrentFrame) {
+            this.dom.classList.add('active-frame');
+            this.currentBadge.style.display = 'inline-block';
+        } else {
+            this.dom.classList.remove('active-frame');
+            this.currentBadge.style.display = 'none';
+        }
+
+        // View Mode Class
+        this.grid.className = `cvat-qaqc-views-grid mode-${viewMode}`;
+
+        // Transform points to local box coordinate frame
+        let localPoints = null;
+        if (pointCloudData && pointCloudData.positions) {
+            localPoints = Math3D.transformAndCropPoints(
+                pointCloudData.positions,
+                pointCloudData.stride || 3,
+                box,
+                1.35
+            );
+        }
+
+        const renderOptions = {
+            zoom,
+            pointSize,
+            color,
+            marginFactor: 1.35,
+            interaction: options.interaction || null
+        };
+
+        const activeViews = viewMode === 'all' ? ['top', 'side', 'front'] : [viewMode];
+
+        for (const viewType of ['top', 'side', 'front']) {
+            const canvas = this.canvases[viewType];
+            const cell = canvas?.parentElement;
+            if (activeViews.includes(viewType)) {
+                if (cell) cell.style.display = 'flex';
+                OrthoCanvasRenderer.render(canvas, localPoints, box, viewType, renderOptions);
+            } else {
+                if (cell) cell.style.display = 'none';
+            }
+        }
+    }
+}
+
+
+    // ------------------------------------------
+    // File: src\ui\macos_dock.js
+    // ------------------------------------------
+
+/**
+ * macOS Docked QA/QC Drawer Component
+ * Strictly adheres to Apple Human Interface Guidelines: No fake titlebars or window traffic lights.
+ * Features a minimal floating trigger button when closed so it never interferes with the workspace.
+ */
+class MacOSDock {
+    /**
+     * @param {Object} callbacks - { onJumpToFrame, onReload }
+     */
+    constructor(callbacks = {}) {
+        this.callbacks = callbacks;
+        this.isOpen = false;
+        this.state = {
+            height: 480,
+            viewMode: 'all', // 'all', 'top', 'front', 'side'
+            zoom: 1.0,
+            pointSize: 1.5,
+            activeClientID: null,
+            currentFrame: 0,
+            framesData: []
+        };
+        this.cards = new Map(); // frame -> FrameCard
+        this.dom = null;
+        this.triggerEl = null;
+        this.triggerDot = null;
+        this.triggerBadge = null;
+        this.filmstrip = null;
+        this.trackBadge = null;
+        this.framesBadge = null;
+        this.emptyState = null;
+
+        this.initDOM();
+        this.setupResizer();
+        this.setupKeyboardShortcuts();
+    }
+
+    initDOM() {
+        // 1. Floating Pill Button (Minimal, unobtrusive launcher)
+        const trigger = document.createElement('div');
+        trigger.className = 'cvat-qaqc-trigger';
+        trigger.title = 'Click to open QA/QC Inspector (Shortcut: Alt + Q)';
+
+        const dot = document.createElement('span');
+        dot.className = 'cvat-qaqc-trigger-dot empty';
+        const label = document.createElement('span');
+        label.textContent = '3D';
+        const badge = document.createElement('span');
+        badge.className = 'cvat-qaqc-trigger-badge';
+
+        trigger.appendChild(dot);
+        trigger.appendChild(label);
+        trigger.appendChild(badge);
+        trigger.addEventListener('click', () => this.toggleOpen());
+        document.body.appendChild(trigger);
+
+        this.triggerEl = trigger;
+        this.triggerDot = dot;
+        this.triggerBadge = badge;
+
+        // 2. Docked Drawer (Hidden by default)
+        const dock = document.createElement('div');
+        dock.className = 'cvat-qaqc-dock';
+        dock.style.height = `${this.state.height}px`;
+
+        // Resizer Knob
+        const resizer = document.createElement('div');
+        resizer.className = 'cvat-qaqc-resizer';
+        const knob = document.createElement('div');
+        knob.className = 'cvat-qaqc-resizer-knob';
+        resizer.appendChild(knob);
+        this.resizerEl = resizer;
+        dock.appendChild(resizer);
+
+        // Toolbar
+        const toolbar = document.createElement('div');
+        toolbar.className = 'cvat-qaqc-toolbar';
+
+        // Left Controls
+        const leftGroup = document.createElement('div');
+        leftGroup.className = 'cvat-qaqc-left-group';
+
+        const title = document.createElement('div');
+        title.className = 'cvat-qaqc-title';
+
+        // Clean SVG 3D Cube Icon (Trusted Types compliant DOM creation)
+        const iconSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+        iconSvg.setAttribute('viewBox', '0 0 24 24');
+        iconSvg.setAttribute('width', '15');
+        iconSvg.setAttribute('height', '15');
+        iconSvg.setAttribute('fill', 'none');
+        iconSvg.setAttribute('stroke', '#0A84FF');
+        iconSvg.setAttribute('stroke-width', '2');
+        iconSvg.setAttribute('stroke-linecap', 'round');
+        iconSvg.setAttribute('stroke-linejoin', 'round');
+
+        const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path1.setAttribute('d', 'M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z');
+        const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+        polyline.setAttribute('points', '3.27 6.96 12 12.01 20.73 6.96');
+        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        line.setAttribute('x1', '12');
+        line.setAttribute('y1', '22.08');
+        line.setAttribute('x2', '12');
+        line.setAttribute('y2', '12');
+
+        iconSvg.appendChild(path1);
+        iconSvg.appendChild(polyline);
+        iconSvg.appendChild(line);
+
+        const titleSpan = document.createElement('span');
+        titleSpan.textContent = '3D QA/QC Inspector';
+        title.appendChild(iconSvg);
+        title.appendChild(titleSpan);
+
+        const trackBadge = document.createElement('span');
+        trackBadge.className = 'cvat-qaqc-track-badge';
+        trackBadge.textContent = 'No Object Selected';
+        this.trackBadge = trackBadge;
+
+        const framesBadge = document.createElement('span');
+        framesBadge.className = 'cvat-qaqc-frames-badge';
+        framesBadge.textContent = '0 frames';
+        this.framesBadge = framesBadge;
+
+        leftGroup.appendChild(title);
+        leftGroup.appendChild(trackBadge);
+        leftGroup.appendChild(framesBadge);
+
+        // Right Controls
+        const rightGroup = document.createElement('div');
+        rightGroup.className = 'cvat-qaqc-right-group';
+
+        // Segmented Control: Views (CVAT Order: Top, Side, Front)
+        const segmented = document.createElement('div');
+        segmented.className = 'cvat-qaqc-segmented';
+        const viewModes = [
+            { id: 'all', label: 'All 3 Views' },
+            { id: 'top', label: 'Top' },
+            { id: 'side', label: 'Side' },
+            { id: 'front', label: 'Front' }
+        ];
+
+        this.segButtons = {};
+        for (const vm of viewModes) {
+            const btn = document.createElement('button');
+            btn.className = `cvat-qaqc-seg-item ${vm.id === this.state.viewMode ? 'active' : ''}`;
+            btn.textContent = vm.label;
+            btn.addEventListener('click', () => this.setViewMode(vm.id));
+            this.segButtons[vm.id] = btn;
+            segmented.appendChild(btn);
+        }
+
+        // Card Display Size Selector (Compact / Medium / Large)
+        const sizeSelect = document.createElement('select');
+        sizeSelect.className = 'cvat-qaqc-select';
+        sizeSelect.style.colorScheme = 'dark';
+        sizeSelect.title = 'Kích thước hiển thị các góc chiếu';
+        [
+            { val: 'compact', label: 'Size: Nhỏ (Compact)', selected: true },
+            { val: 'medium', label: 'Size: Vừa (Medium)' },
+            { val: 'large', label: 'Size: Lớn (Large)' }
+        ].forEach(({ val, label, selected }) => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = label;
+            opt.style.backgroundColor = '#222225';
+            opt.style.color = '#ffffff';
+            if (selected) opt.selected = true;
+            sizeSelect.appendChild(opt);
+        });
+        sizeSelect.addEventListener('change', (e) => {
+            this.setCardSize(e.target.value);
+        });
+
+        // Zoom Selector (supports zoom < 100%)
+        const zoomSelect = document.createElement('select');
+        zoomSelect.className = 'cvat-qaqc-select';
+        zoomSelect.style.colorScheme = 'dark';
+        [
+            { val: '0.4', label: 'Zoom 40%' },
+            { val: '0.6', label: 'Zoom 60%' },
+            { val: '0.8', label: 'Zoom 80%' },
+            { val: '1.0', label: 'Zoom 100%', selected: true },
+            { val: '1.25', label: 'Zoom 125%' },
+            { val: '1.5', label: 'Zoom 150%' },
+            { val: '2.0', label: 'Zoom 200%' }
+        ].forEach(({ val, label, selected }) => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = label;
+            opt.style.backgroundColor = '#222225';
+            opt.style.color = '#ffffff';
+            if (selected) opt.selected = true;
+            zoomSelect.appendChild(opt);
+        });
+        zoomSelect.addEventListener('change', (e) => {
+            this.state.zoom = parseFloat(e.target.value);
+            this.refreshAllCards();
+        });
+
+        // Point Size Selector
+        const ptSelect = document.createElement('select');
+        ptSelect.className = 'cvat-qaqc-select';
+        ptSelect.style.colorScheme = 'dark';
+        [
+            { val: '1.0', label: 'Pt: 1px' },
+            { val: '1.5', label: 'Pt: 1.5px', selected: true },
+            { val: '2.0', label: 'Pt: 2px' },
+            { val: '3.0', label: 'Pt: 3px' }
+        ].forEach(({ val, label, selected }) => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = label;
+            opt.style.backgroundColor = '#222225';
+            opt.style.color = '#ffffff';
+            if (selected) opt.selected = true;
+            ptSelect.appendChild(opt);
+        });
+        ptSelect.addEventListener('change', (e) => {
+            this.state.pointSize = parseFloat(e.target.value);
+            this.refreshAllCards();
+        });
+
+        // Copy Size Button (Active Frame / Cuboid)
+        const copySizeBtn = document.createElement('button');
+        copySizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-copy-size-btn';
+        copySizeBtn.textContent = '📋 Copy Size';
+        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn vào clipboard (Alt+Shift+C)';
+        copySizeBtn.addEventListener('click', () => {
+            const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
+            if (activeCard) {
+                activeCard.handleCopySize(copySizeBtn);
+            } else {
+                const domSize = SizeClipboard.extractFromCvatDom();
+                if (domSize) {
+                    SizeClipboard.copy(domSize);
+                    copySizeBtn.classList.add('success-flash');
+                    copySizeBtn.textContent = '✓ Đã Copy!';
+                    setTimeout(() => {
+                        copySizeBtn.classList.remove('success-flash');
+                        copySizeBtn.textContent = '📋 Copy Size';
+                    }, 1200);
+                }
+            }
+        });
+
+        // Paste Size Button (Active Frame)
+        const pasteSizeBtn = document.createElement('button');
+        pasteSizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-paste-size-btn';
+        pasteSizeBtn.textContent = '📄 Paste Size';
+        pasteSizeBtn.title = 'Dán kích thước từ clipboard vào frame đang chọn (Alt+Shift+V)';
+        pasteSizeBtn.addEventListener('click', async () => {
+            const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
+            if (activeCard) {
+                await activeCard.handlePasteSize(pasteSizeBtn);
+            }
+        });
+
+        // Paste Size to All Frames Button
+        const pasteAllBtn = document.createElement('button');
+        pasteAllBtn.className = 'cvat-qaqc-btn cvat-qaqc-paste-all-btn';
+        pasteAllBtn.textContent = '📄 Paste All';
+        pasteAllBtn.title = 'Dán kích thước từ clipboard cho TẤT CẢ các frame của track này';
+        pasteAllBtn.addEventListener('click', async () => {
+            await this.pasteSizeToAllCards(pasteAllBtn);
+        });
+
+        // Jump to Active Frame Button
+        const jumpBtn = document.createElement('button');
+        jumpBtn.className = 'cvat-qaqc-btn';
+        jumpBtn.textContent = 'Jump to Active';
+        jumpBtn.addEventListener('click', () => this.scrollToActiveFrame());
+
+        // Close / Hide Button (Collapses back to floating button)
+        const hideBtn = document.createElement('button');
+        hideBtn.className = 'cvat-qaqc-btn';
+        const hideSpan = document.createElement('span');
+        hideSpan.textContent = '✕ Ẩn / Hide';
+        hideBtn.appendChild(hideSpan);
+        hideBtn.title = 'Hide inspector (Alt + Q)';
+        hideBtn.addEventListener('click', () => this.close());
+
+        rightGroup.appendChild(segmented);
+        rightGroup.appendChild(sizeSelect);
+        rightGroup.appendChild(zoomSelect);
+        rightGroup.appendChild(ptSelect);
+        rightGroup.appendChild(copySizeBtn);
+        rightGroup.appendChild(pasteSizeBtn);
+        rightGroup.appendChild(pasteAllBtn);
+        rightGroup.appendChild(jumpBtn);
+        rightGroup.appendChild(hideBtn);
+
+        toolbar.appendChild(leftGroup);
+        toolbar.appendChild(rightGroup);
+        dock.appendChild(toolbar);
+
+        // Filmstrip Container (Compact by default)
+        const filmstrip = document.createElement('div');
+        filmstrip.className = 'cvat-qaqc-filmstrip size-compact';
+        this.filmstrip = filmstrip;
+
+        // Empty State
+        const empty = document.createElement('div');
+        empty.className = 'cvat-qaqc-empty-state';
+        const emptyTitle = document.createElement('div');
+        emptyTitle.className = 'cvat-qaqc-empty-title';
+        emptyTitle.textContent = 'No 3D Object Selected';
+        const emptySub = document.createElement('div');
+        emptySub.className = 'cvat-qaqc-empty-sub';
+        emptySub.textContent = 'Select any cuboid or track in CVAT to inspect its orthogonal projections across all frames.';
+        empty.appendChild(emptyTitle);
+        empty.appendChild(emptySub);
+        this.emptyState = empty;
+        filmstrip.appendChild(empty);
+
+        dock.appendChild(filmstrip);
+
+        this.dom = dock;
+        document.body.appendChild(dock);
+    }
+
+    setupKeyboardShortcuts() {
+        window.addEventListener('keydown', (e) => {
+            const tag = (e.target && e.target.tagName) || '';
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) {
+                return;
+            }
+
+            if ((e.altKey || e.metaKey) && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q')) {
+                e.preventDefault();
+                this.toggleOpen();
+                return;
+            } else if (e.altKey && e.shiftKey && (e.code === 'KeyC' || e.key === 'c' || e.key === 'C')) {
+                e.preventDefault();
+                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
+                if (activeCard) activeCard.handleCopySize();
+                return;
+            } else if (e.altKey && e.shiftKey && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) {
+                e.preventDefault();
+                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
+                if (activeCard) activeCard.handlePasteSize();
+                return;
+            }
+
+            // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
+            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+            if (isCtrlOrCmd && !e.altKey) {
+                if ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
+                    // Undo directly on CVAT & UI
+                    if (typeof this.callbacks.onUndo === 'function') {
+                        e.preventDefault();
+                        this.callbacks.onUndo();
+                    }
+                } else if (
+                    ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && e.shiftKey) ||
+                    (e.code === 'KeyY' || e.key === 'y' || e.key === 'Y')
+                ) {
+                    // Redo directly on CVAT & UI
+                    if (typeof this.callbacks.onRedo === 'function') {
+                        e.preventDefault();
+                        this.callbacks.onRedo();
+                    }
+                }
+            }
+        });
+    }
+
+    /**
+     * Paste dimensions from clipboard to ALL loaded cards of the current track
+     */
+    async pasteSizeToAllCards(btn = null) {
+        const size = await SizeClipboard.get();
+        if (!size) {
+            console.warn('[CVAT-QAQC] No size in clipboard to paste');
+            return;
+        }
+
+        let updated = 0;
+        for (const card of this.cards.values()) {
+            if (card && typeof card.pasteSize === 'function') {
+                card.pasteSize(size);
+                updated++;
+            }
+        }
+
+        if (btn) {
+            const origHTML = btn.innerHTML;
+            btn.classList.add('success-flash');
+            btn.innerHTML = `✓ Đã dán ${updated}f!`;
+            setTimeout(() => {
+                btn.classList.remove('success-flash');
+                btn.innerHTML = origHTML;
+            }, 1500);
+        }
+        console.log(`[CVAT-QAQC] Pasted size (${size.sx} × ${size.sy} × ${size.sz}m) to ${updated} frames`);
+    }
+
+    open() {
+        this.isOpen = true;
+        this.dom.classList.add('open');
+        this.triggerEl.style.display = 'none'; // Hide trigger when drawer is active
+        if (typeof this.callbacks.onOpen === 'function') {
+            this.callbacks.onOpen();
+        }
+        this.refreshAllCards();
+        this.scrollToActiveFrame();
+    }
+
+    close() {
+        this.isOpen = false;
+        this.dom.classList.remove('open');
+        this.triggerEl.style.display = 'flex'; // Restore trigger button
+    }
+
+    toggleOpen() {
+        if (this.isOpen) {
+            this.close();
+        } else {
+            this.open();
+        }
+    }
+
+    setupResizer() {
+        let isDragging = false;
+        let startY = 0;
+        let startH = 0;
+
+        this.resizerEl.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startY = e.clientY;
+            startH = this.dom.offsetHeight;
+            document.body.style.cursor = 'ns-resize';
+            e.preventDefault();
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const deltaY = startY - e.clientY;
+            const newH = Math.max(180, Math.min(window.innerHeight * 0.85, startH + deltaY));
+            this.state.height = newH;
+            this.dom.style.height = `${newH}px`;
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                document.body.style.cursor = '';
+            }
+        });
+    }
+
+    setViewMode(mode) {
+        this.state.viewMode = mode;
+        for (const [id, btn] of Object.entries(this.segButtons)) {
+            if (id === mode) btn.classList.add('active');
+            else btn.classList.remove('active');
+        }
+        this.refreshAllCards();
+    }
+
+    setCardSize(size) {
+        if (!this.filmstrip) return;
+        this.filmstrip.classList.remove('size-compact', 'size-medium', 'size-large');
+        this.filmstrip.classList.add(`size-${size}`);
+        requestAnimationFrame(() => {
+            this.refreshAllCards();
+        });
+    }
+
+    /**
+     * Update active object track data
+     * @param {number|null} clientID
+     * @param {Array} framesData
+     * @param {number} currentFrame
+     * @param {any} pcdCache
+     */
+    updateTrack(clientID, framesData, currentFrame, pcdCache) {
+        this.state.activeClientID = clientID;
+        this.state.framesData = framesData || [];
+        this.state.currentFrame = currentFrame;
+        this.pcdCache = pcdCache;
+
+        if (!clientID || framesData.length === 0) {
+            this.trackBadge.textContent = 'No Object Selected';
+            this.framesBadge.textContent = '0 frames';
+            this.triggerDot.className = 'cvat-qaqc-trigger-dot empty';
+            this.triggerBadge.textContent = '';
+            this.triggerEl.classList.remove('has-object');
+            this.filmstrip.replaceChildren(this.emptyState);
+            this.cards.clear();
+            return;
+        }
+
+        const labelName = framesData[0]?.label?.name || 'Object';
+        this.trackBadge.textContent = `Track #${clientID} [${labelName}]`;
+        this.framesBadge.textContent = `${framesData.length} frames`;
+
+        // Update floating pill badge without intruding on the user
+        this.triggerDot.className = 'cvat-qaqc-trigger-dot';
+        this.triggerBadge.textContent = `#${clientID} (${framesData.length}f)`;
+        this.triggerEl.classList.add('has-object');
+
+        // Clear filmstrip and build cards
+        this.filmstrip.replaceChildren();
+        this.cards.clear();
+
+        for (const fData of framesData) {
+            const card = new FrameCard(
+                fData,
+                (frame) => {
+                    if (typeof this.callbacks.onJumpToFrame === 'function') {
+                        this.callbacks.onJumpToFrame(frame);
+                    }
+                },
+                (frame, newPoints, newBox) => {
+                    if (typeof this.callbacks.onUpdateCuboid === 'function') {
+                        this.callbacks.onUpdateCuboid(frame, this.state.activeClientID, newPoints, newBox);
+                    }
+                },
+                (sizeObj) => {
+                    this.pasteSizeToAllCards(null);
+                }
+            );
+
+            this.cards.set(fData.frame, card);
+            this.filmstrip.appendChild(card.dom);
+
+            // Render view
+            const pts = pcdCache?.get(fData.frame);
+            card.renderViews(pts, fData.frame === currentFrame, {
+                viewMode: this.state.viewMode,
+                zoom: this.state.zoom,
+                pointSize: this.state.pointSize
+            });
+        }
+
+        if (this.isOpen) {
+            this.scrollToActiveFrame();
+        }
+    }
+
+    /**
+     * In-place data update across all frame cards on Undo/Redo or history changes
+     * Zero DOM recreation, preserving scroll and focus
+     * @param {Array} framesData
+     */
+    refreshTrackData(framesData) {
+        if (!Array.isArray(framesData) || framesData.length === 0) return;
+        this.state.framesData = framesData;
+
+        // If card count matches frame count, update cards in-place
+        if (this.cards.size === framesData.length) {
+            for (const fData of framesData) {
+                const card = this.cards.get(fData.frame);
+                if (card && typeof card.updateData === 'function') {
+                    card.updateData(fData);
+                }
+            }
+        } else {
+            // If frames were added/removed, do a clean rebuild
+            this.updateTrack(this.state.activeClientID, framesData, this.state.currentFrame, this.pcdCache);
+        }
+    }
+
+    /**
+     * Update active frame highlight
+     * @param {number} frameNumber
+     * @param {any} pcdCache
+     */
+    updateActiveFrame(frameNumber, pcdCache) {
+        this.state.currentFrame = frameNumber;
+        this.pcdCache = pcdCache;
+
+        for (const [f, card] of this.cards.entries()) {
+            const pts = pcdCache?.get(f);
+            card.renderViews(pts, f === frameNumber, {
+                viewMode: this.state.viewMode,
+                zoom: this.state.zoom,
+                pointSize: this.state.pointSize
+            });
+        }
+
+        if (this.isOpen) {
+            this.scrollToActiveFrame();
+        }
+    }
+
+    /**
+     * Update point cloud on an individual frame card as soon as it decodes in memory
+     * @param {number} frame
+     * @param {{ positions: Float32Array, stride: number } | null} pts
+     */
+    updateCardPointCloud(frame, pts) {
+        const card = this.cards.get(frame);
+        if (card) {
+            card.renderViews(pts, frame === this.state.currentFrame, {
+                viewMode: this.state.viewMode,
+                zoom: this.state.zoom,
+                pointSize: this.state.pointSize
+            });
+        }
+    }
+
+    refreshAllCards() {
+        for (const [f, card] of this.cards.entries()) {
+            const pts = this.pcdCache?.get(f);
+            card.renderViews(pts, f === this.state.currentFrame, {
+                viewMode: this.state.viewMode,
+                zoom: this.state.zoom,
+                pointSize: this.state.pointSize
+            });
+        }
+    }
+
+    scrollToActiveFrame() {
+        const activeCard = this.cards.get(this.state.currentFrame);
+        if (activeCard && activeCard.dom) {
+            activeCard.dom.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
+}
+
+
+    // ------------------------------------------
+    // File: content\injector.js
+    // ------------------------------------------
+
+/**
+ * CVAT 3D QA/QC Inspector - Main Injector
+ * Connects the zero-request hooks, in-memory point cache, and macOS Dock UI.
+ */
+
+
+
+
+(async function initQAQCInspector() {
+    console.log('[CVAT-QAQC] Initializing 3D QA/QC Inspector...');
+
+    const pcdCache = new PCDCache();
+    const hook = new CVATHook();
+
+    const dock = new MacOSDock({
+        onOpen: () => hook.refreshActiveObject(),
+        onJumpToFrame: (f) => hook.jumpToFrame(f),
+        onUndo: () => hook.undo(),
+        onRedo: () => hook.redo(),
+        onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
+            await hook.updateObjectCuboid(frame, clientID, newPoints);
+        }
+    });
+
+    let currentTrackFrames = [];
+    let currentClientID = null;
+
+    // Listen for object selection change (track or shape)
+    hook.on('objectChange', async ({ clientID, job, canvas, frame }) => {
+        currentClientID = clientID;
+
+        if (canvas) {
+            pcdCache.captureFromThreeScene(frame, canvas);
+        }
+
+        if (clientID === null) {
+            currentTrackFrames = [];
+            dock.updateTrack(null, [], frame, pcdCache);
+            return;
+        }
+
+        console.log(`[CVAT-QAQC] Selected Object / Track #${clientID}. Extracting all frames in-memory...`);
+        try {
+            currentTrackFrames = await TrackReader.getTrackFrames(clientID, job);
+            console.log(`[CVAT-QAQC] Found ${currentTrackFrames.length} frames for Track #${clientID}`);
+            dock.updateTrack(clientID, currentTrackFrames, frame, pcdCache);
+
+            // Immediately preload and decode point clouds across all frames of the track upfront!
+            const frameNumbers = currentTrackFrames.map(f => f.frame);
+            pcdCache.preloadTrackFrames(frameNumbers, job, (loadedFrame, pts) => {
+                dock.updateCardPointCloud(loadedFrame, pts);
+            });
+        } catch (err) {
+            console.error('[CVAT-QAQC] Error extracting track frames:', err);
+        }
+    });
+
+    // Listen for frame navigation in CVAT
+    hook.on('frameChange', async ({ frame, clientID, job, canvas }) => {
+        // Try capturing point cloud from the newly rendered Three.js scene
+        setTimeout(() => {
+            if (canvas) {
+                pcdCache.captureFromThreeScene(frame, canvas);
+            }
+            dock.updateActiveFrame(frame, pcdCache);
+        }, 150);
+    });
+
+    // Listen for canvas instance readiness
+    hook.on('canvasReady', (canvas) => {
+        if (canvas && hook.currentFrame !== null) {
+            pcdCache.captureFromThreeScene(hook.currentFrame, canvas);
+        }
+    });
+
+    // Listen for CVAT undo/redo or annotation history changes
+    hook.on('historyChange', async ({ clientID, frame }) => {
+        const targetID = clientID || currentClientID;
+        if (targetID !== null && hook.jobInstance) {
+            try {
+                currentTrackFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
+                dock.refreshTrackData(currentTrackFrames);
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error refreshing track after history change:', err);
+            }
+        }
+    });
+
+    // Start hooking into CVAT React Fiber / Redux
+    await hook.init();
+})();
+
+
+})();
