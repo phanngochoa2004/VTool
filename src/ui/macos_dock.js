@@ -18,7 +18,8 @@ export class MacOSDock {
             height: 480,
             viewMode: 'all', // 'all', 'top', 'front', 'side'
             zoom: 1.0,
-            pointSize: 1.5,
+            pointSize: 1.0,
+            cardSize: 'medium',
             activeClientID: null,
             currentFrame: 0,
             framesData: []
@@ -160,8 +161,8 @@ export class MacOSDock {
         sizeSelect.style.colorScheme = 'dark';
         sizeSelect.title = 'Kích thước hiển thị các góc chiếu';
         [
-            { val: 'compact', label: 'Size: Nhỏ (Compact)', selected: true },
-            { val: 'medium', label: 'Size: Vừa (Medium)' },
+            { val: 'compact', label: 'Size: Nhỏ (Compact)' },
+            { val: 'medium', label: 'Size: Vừa (Medium)', selected: true },
             { val: 'large', label: 'Size: Lớn (Large)' }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
@@ -207,8 +208,9 @@ export class MacOSDock {
         ptSelect.className = 'cvat-qaqc-select';
         ptSelect.style.colorScheme = 'dark';
         [
-            { val: '1.0', label: 'Pt: 1px' },
-            { val: '1.5', label: 'Pt: 1.5px', selected: true },
+            { val: '0.5', label: 'Pt: 0.5px' },
+            { val: '1.0', label: 'Pt: 1px', selected: true },
+            { val: '1.5', label: 'Pt: 1.5px' },
             { val: '2.0', label: 'Pt: 2px' },
             { val: '3.0', label: 'Pt: 3px' }
         ].forEach(({ val, label, selected }) => {
@@ -224,6 +226,12 @@ export class MacOSDock {
             this.state.pointSize = parseFloat(e.target.value);
             this.refreshAllCards();
         });
+
+        // Rotate Buttons Group (Active Frame)
+        const rotGroup = document.createElement('div');
+        rotGroup.className = 'cvat-qaqc-rot-group';
+        this.rotGroup = rotGroup;
+        this.updateToolbarRotateButtons();
 
         // Copy Size Button (Active Frame / Cuboid)
         const copySizeBtn = document.createElement('button');
@@ -248,27 +256,6 @@ export class MacOSDock {
             }
         });
 
-        // Paste Size Button (Active Frame)
-        const pasteSizeBtn = document.createElement('button');
-        pasteSizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-paste-size-btn';
-        pasteSizeBtn.textContent = '📄 Paste Size';
-        pasteSizeBtn.title = 'Dán kích thước từ clipboard vào frame đang chọn (Alt+Shift+V)';
-        pasteSizeBtn.addEventListener('click', async () => {
-            const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
-            if (activeCard) {
-                await activeCard.handlePasteSize(pasteSizeBtn);
-            }
-        });
-
-        // Paste Size to All Frames Button
-        const pasteAllBtn = document.createElement('button');
-        pasteAllBtn.className = 'cvat-qaqc-btn cvat-qaqc-paste-all-btn';
-        pasteAllBtn.textContent = '📄 Paste All';
-        pasteAllBtn.title = 'Dán kích thước từ clipboard cho TẤT CẢ các frame của track này';
-        pasteAllBtn.addEventListener('click', async () => {
-            await this.pasteSizeToAllCards(pasteAllBtn);
-        });
-
         // Jump to Active Frame Button
         const jumpBtn = document.createElement('button');
         jumpBtn.className = 'cvat-qaqc-btn';
@@ -288,9 +275,8 @@ export class MacOSDock {
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
+        rightGroup.appendChild(rotGroup);
         rightGroup.appendChild(copySizeBtn);
-        rightGroup.appendChild(pasteSizeBtn);
-        rightGroup.appendChild(pasteAllBtn);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(hideBtn);
 
@@ -298,9 +284,9 @@ export class MacOSDock {
         toolbar.appendChild(rightGroup);
         dock.appendChild(toolbar);
 
-        // Filmstrip Container (Compact by default)
+        // Filmstrip Container (Medium by default)
         const filmstrip = document.createElement('div');
-        filmstrip.className = 'cvat-qaqc-filmstrip size-compact';
+        filmstrip.className = 'cvat-qaqc-filmstrip size-medium';
         this.filmstrip = filmstrip;
 
         // Empty State
@@ -321,6 +307,46 @@ export class MacOSDock {
 
         this.dom = dock;
         document.body.appendChild(dock);
+    }
+
+    updateToolbarRotateButtons() {
+        if (!this.rotGroup) return;
+        this.rotGroup.replaceChildren();
+
+        const mode = this.state.viewMode;
+        const targetView = (mode === 'side' || mode === 'front') ? mode : 'top';
+        const axisName = targetView === 'top' ? 'Yaw (Trục Z)' : (targetView === 'side' ? 'Pitch (Trục X)' : 'Roll (Trục Y)');
+        const isTop = targetView === 'top';
+        const stepDeg = isTop ? 5 : 1;
+        const stepRad = stepDeg * Math.PI / 180;
+
+        this.rotGroup.title = `Xoay góc ${axisName} (Frame đang chọn)`;
+
+        const buttons = [
+            { label: '↺ 90°', delta: -Math.PI / 2, title: `Xoay -90° (${axisName} - Active Frame)` },
+            { label: `↺ ${stepDeg}°`, delta: -stepRad, title: `Xoay -${stepDeg}° (${axisName} - Active Frame)` },
+            { label: `↻ ${stepDeg}°`, delta: stepRad,  title: `Xoay +${stepDeg}° (${axisName} - Active Frame)` },
+            { label: '↻ 90°', delta: Math.PI / 2,  title: `Xoay +90° (${axisName} - Active Frame)` }
+        ];
+
+        buttons.forEach(({ label, delta, title }) => {
+            const btn = document.createElement('button');
+            btn.className = 'cvat-qaqc-rot-btn';
+            btn.textContent = label;
+            btn.title = title;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
+                if (activeCard) {
+                    if (typeof activeCard.rotateView === 'function') {
+                        activeCard.rotateView(targetView, delta);
+                    } else if (typeof activeCard.rotateBy === 'function') {
+                        activeCard.rotateBy(delta);
+                    }
+                }
+            });
+            this.rotGroup.appendChild(btn);
+        });
     }
 
     setupKeyboardShortcuts() {
@@ -459,6 +485,7 @@ export class MacOSDock {
             if (id === mode) btn.classList.add('active');
             else btn.classList.remove('active');
         }
+        this.updateToolbarRotateButtons();
         this.refreshAllCards();
     }
 

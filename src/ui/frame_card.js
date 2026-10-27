@@ -33,6 +33,7 @@ export class FrameCard {
         this.isCurrent = false;
 
         this.valDisplays = {};
+        this.angleDisplays = {};
         this.dragState = null;
         this.hoverState = null;
         this.rafPending = false;
@@ -111,17 +112,6 @@ export class FrameCard {
             await this.handlePasteSize(pasteBtn);
         });
 
-        // Edit Drawer Toggle Button
-        const editToggleBtn = document.createElement('button');
-        editToggleBtn.className = 'cvat-qaqc-edit-toggle-btn';
-        editToggleBtn.textContent = '✎ Sửa / Edit';
-        editToggleBtn.title = 'Chỉnh sửa vị trí, kích thước, góc quay của cuboid trên frame này';
-        editToggleBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.toggleEditPanel();
-        });
-        this.editToggleBtn = editToggleBtn;
-
         // Jump Button
         const jumpBtn = document.createElement('button');
         jumpBtn.className = 'cvat-qaqc-jump-btn';
@@ -134,7 +124,6 @@ export class FrameCard {
 
         rightGroup.appendChild(copyBtn);
         rightGroup.appendChild(pasteBtn);
-        rightGroup.appendChild(editToggleBtn);
         rightGroup.appendChild(jumpBtn);
 
         header.appendChild(leftGroup);
@@ -159,10 +148,29 @@ export class FrameCard {
             const cell = document.createElement('div');
             cell.className = `cvat-qaqc-view-cell cell-${viewType}`;
 
-            // CVAT-style Header Strip for each view
+            // CVAT-style Header Strip for each view with integrated rotation buttons
             const cellHeader = document.createElement('div');
             cellHeader.className = 'cvat-qaqc-cell-header';
-            cellHeader.textContent = label;
+
+            const cellTitle = document.createElement('div');
+            cellTitle.className = 'cvat-qaqc-cell-title';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.className = 'cvat-qaqc-cell-name';
+            nameSpan.textContent = label;
+
+            const angleSpan = document.createElement('span');
+            angleSpan.className = 'cvat-qaqc-cell-angle';
+            this.angleDisplays[viewType] = angleSpan;
+
+            cellTitle.appendChild(nameSpan);
+            cellTitle.appendChild(angleSpan);
+
+            // Rotate buttons for this specific view (Top: Yaw, Side: Pitch, Front: Roll)
+            const rotGroup = this.createRotateGroup(viewType, (delta) => this.rotateView(viewType, delta));
+
+            cellHeader.appendChild(cellTitle);
+            cellHeader.appendChild(rotGroup);
 
             const canvas = document.createElement('canvas');
             canvas.width = 220;
@@ -176,217 +184,72 @@ export class FrameCard {
             grid.appendChild(cell);
         }
 
-        // 3. In-Place Edit Panel (Collapsible)
-        const editPanel = this.createEditPanel();
-        this.editPanelEl = editPanel;
-
         card.appendChild(header);
         card.appendChild(grid);
-        card.appendChild(editPanel);
 
         return card;
     }
 
     /**
-     * Build interactive in-place editing panel adhering to macOS HIG
+     * Rotate cuboid in specific projection view
+     * @param {'top'|'side'|'front'} viewType
+     * @param {number} deltaRad - angle increment in radians
      */
-    createEditPanel() {
-        const panel = document.createElement('div');
-        panel.className = 'cvat-qaqc-edit-panel';
-        panel.style.display = 'none';
-
-        panel.addEventListener('click', (e) => e.stopPropagation());
-
-        // Row 1: Position (Vị trí X, Y, Z)
-        const posRow = document.createElement('div');
-        posRow.className = 'cvat-qaqc-edit-row';
-
-        const posLabel = document.createElement('div');
-        posLabel.className = 'cvat-qaqc-edit-label';
-        posLabel.textContent = 'Vị trí / Pos';
-
-        const posControls = document.createElement('div');
-        posControls.className = 'cvat-qaqc-edit-controls';
-
-        posControls.appendChild(this.createStepper('X', 'x', 0.05, 'm'));
-        posControls.appendChild(this.createStepper('Y', 'y', 0.05, 'm'));
-        posControls.appendChild(this.createStepper('Z', 'z', 0.05, 'm'));
-
-        posRow.appendChild(posLabel);
-        posRow.appendChild(posControls);
-
-        // Row 2: Dimensions (Kích thước W, L, H)
-        const sizeRow = document.createElement('div');
-        sizeRow.className = 'cvat-qaqc-edit-row';
-
-        const sizeLabel = document.createElement('div');
-        sizeLabel.className = 'cvat-qaqc-edit-label';
-        sizeLabel.textContent = 'Kích thước';
-
-        const sizeControls = document.createElement('div');
-        sizeControls.className = 'cvat-qaqc-edit-controls';
-
-        sizeControls.appendChild(this.createStepper('W (X)', 'sx', 0.05, 'm', 0.1));
-        sizeControls.appendChild(this.createStepper('L (Y)', 'sy', 0.05, 'm', 0.1));
-        sizeControls.appendChild(this.createStepper('H (Z)', 'sz', 0.05, 'm', 0.1));
-
-        // Copy / Paste Size buttons in edit row
-        const sizeCopyBtn = document.createElement('button');
-        sizeCopyBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-copy-size-btn';
-        sizeCopyBtn.textContent = '📋 Copy';
-        sizeCopyBtn.title = 'Sao chép kích thước WxLxH của frame này vào clipboard';
-        sizeCopyBtn.addEventListener('click', () => this.handleCopySize(sizeCopyBtn));
-
-        const sizePasteBtn = document.createElement('button');
-        sizePasteBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-paste-size-btn';
-        sizePasteBtn.textContent = '📄 Paste';
-        sizePasteBtn.title = 'Dán kích thước từ clipboard vào frame này';
-        sizePasteBtn.addEventListener('click', () => this.handlePasteSize(sizePasteBtn));
-
-        sizeControls.appendChild(sizeCopyBtn);
-        sizeControls.appendChild(sizePasteBtn);
-
-        sizeRow.appendChild(sizeLabel);
-        sizeRow.appendChild(sizeControls);
-
-        // Row 3: Rotation / Yaw (Quay góc Yaw)
-        const rotRow = document.createElement('div');
-        rotRow.className = 'cvat-qaqc-edit-row';
-
-        const rotLabel = document.createElement('div');
-        rotLabel.className = 'cvat-qaqc-edit-label';
-        rotLabel.textContent = 'Góc quay / Yaw';
-
-        const rotControls = document.createElement('div');
-        rotControls.className = 'cvat-qaqc-edit-controls';
-
-        const yawVal = document.createElement('span');
-        yawVal.className = 'cvat-qaqc-yaw-val-text';
-        this.valDisplays['yaw'] = yawVal;
-        this.updateYawDisplay();
-
-        const rCoarseMinus = this.createAngleBtn('↺ -5°', -5 * Math.PI / 180);
-        const rFineMinus = this.createAngleBtn('↺ -1°', -1 * Math.PI / 180);
-        const rFinePlus = this.createAngleBtn('↻ +1°', 1 * Math.PI / 180);
-        const rCoarsePlus = this.createAngleBtn('↻ +5°', 5 * Math.PI / 180);
-        const rFlip180 = this.createAngleBtn('⟲ Đảo 180°', Math.PI, 'Đảo ngược hướng đầu xe 180° (Flip Heading)');
-
-        rotControls.appendChild(yawVal);
-        rotControls.appendChild(rCoarseMinus);
-        rotControls.appendChild(rFineMinus);
-        rotControls.appendChild(rFinePlus);
-        rotControls.appendChild(rCoarsePlus);
-        rotControls.appendChild(rFlip180);
-
-        rotRow.appendChild(rotLabel);
-        rotRow.appendChild(rotControls);
-
-        // Row 4: Status & Quick Actions
-        const footerRow = document.createElement('div');
-        footerRow.className = 'cvat-qaqc-edit-footer';
-
-        const statusNote = document.createElement('span');
-        statusNote.className = 'cvat-qaqc-edit-status-note';
-        statusNote.textContent = '● Lưu vào bộ nhớ CVAT (0 request)';
-        this.statusNote = statusNote;
-
-        const pasteAllBtn = document.createElement('button');
-        pasteAllBtn.className = 'cvat-qaqc-paste-all-btn';
-        pasteAllBtn.textContent = '📄 Dán cho TẤT CẢ frame / Paste All';
-        pasteAllBtn.title = 'Áp dụng kích thước hiện tại cho mọi frame của đối tượng này';
-        pasteAllBtn.addEventListener('click', () => this.handlePasteSizeToAll(pasteAllBtn));
-
-        const resetBtn = document.createElement('button');
-        resetBtn.className = 'cvat-qaqc-reset-btn';
-        resetBtn.textContent = '↺ Hoàn tác / Reset';
-        resetBtn.title = 'Khôi phục lại kích thước và góc ban đầu của frame này';
-        resetBtn.addEventListener('click', () => this.resetToOriginal());
-
-        footerRow.appendChild(statusNote);
-        footerRow.appendChild(pasteAllBtn);
-        footerRow.appendChild(resetBtn);
-
-        panel.appendChild(posRow);
-        panel.appendChild(sizeRow);
-        panel.appendChild(rotRow);
-        panel.appendChild(footerRow);
-
-        return panel;
-    }
-
-    /**
-     * Create stepper control [-] [Value] [+]
-     */
-    createStepper(label, propKey, step = 0.05, unit = 'm', minVal = -Infinity) {
-        const stepper = document.createElement('div');
-        stepper.className = 'cvat-qaqc-stepper';
-
-        const decBtn = document.createElement('button');
-        decBtn.className = 'cvat-qaqc-step-btn';
-        decBtn.textContent = '−';
-        decBtn.title = `Giảm ${label} (Shift: x5)`;
-        decBtn.addEventListener('click', (e) => {
-            const actualStep = e.shiftKey ? step * 5 : step;
-            this.adjustProp(propKey, -actualStep, minVal);
-        });
-
-        const valSpan = document.createElement('span');
-        valSpan.className = 'cvat-qaqc-step-val';
-        this.valDisplays[propKey] = { el: valSpan, label, unit };
-        this.updateStepDisplay(propKey);
-
-        const incBtn = document.createElement('button');
-        incBtn.className = 'cvat-qaqc-step-btn';
-        incBtn.textContent = '+';
-        incBtn.title = `Tăng ${label} (Shift: x5)`;
-        incBtn.addEventListener('click', (e) => {
-            const actualStep = e.shiftKey ? step * 5 : step;
-            this.adjustProp(propKey, actualStep, minVal);
-        });
-
-        stepper.appendChild(decBtn);
-        stepper.appendChild(valSpan);
-        stepper.appendChild(incBtn);
-
-        return stepper;
-    }
-
-    /**
-     * Create button to add/subtract angle
-     */
-    createAngleBtn(text, deltaRad, title) {
-        const btn = document.createElement('button');
-        btn.className = 'cvat-qaqc-rot-btn';
-        btn.textContent = text;
-        if (title) btn.title = title;
-        btn.addEventListener('click', () => {
-            this.adjustRotation(deltaRad);
-        });
-        return btn;
-    }
-
-    adjustProp(propKey, delta, minVal = -Infinity) {
+    rotateView(viewType, deltaRad) {
         if (!this.data.box) this.data.box = {};
+
+        // Top: Yaw (rz, around Z)
+        // Side: Pitch (rx, around X)
+        // Front: Roll (ry, around Y)
+        const propKey = viewType === 'top' ? 'rz' : (viewType === 'side' ? 'rx' : 'ry');
         const current = typeof this.data.box[propKey] === 'number' ? this.data.box[propKey] : 0;
-        const nextVal = Math.max(minVal, current + delta);
-        this.data.box[propKey] = parseFloat(nextVal.toFixed(3));
+        let nextVal = current + deltaRad;
 
+        while (nextVal > Math.PI) nextVal -= Math.PI * 2;
+        while (nextVal < -Math.PI) nextVal += Math.PI * 2;
+
+        this.data.box[propKey] = parseFloat(nextVal.toFixed(4));
         this.applyBoxChanges();
-        this.updateStepDisplay(propKey);
     }
 
-    adjustRotation(deltaRad) {
-        if (!this.data.box) this.data.box = {};
-        const current = typeof this.data.box.rz === 'number' ? this.data.box.rz : 0;
-        let nextRz = current + deltaRad;
+    /**
+     * Convenience method for rotating Yaw (around Z)
+     * @param {number} deltaRad
+     */
+    rotateBy(deltaRad) {
+        this.rotateView('top', deltaRad);
+    }
 
-        while (nextRz > Math.PI) nextRz -= Math.PI * 2;
-        while (nextRz < -Math.PI) nextRz += Math.PI * 2;
+    createRotateGroup(viewType = 'top', onRotate) {
+        const group = document.createElement('div');
+        group.className = 'cvat-qaqc-rot-group';
+        const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'side' ? 'Pitch' : 'Roll');
+        group.title = `Xoay góc ${axisName}`;
 
-        this.data.box.rz = parseFloat(nextRz.toFixed(4));
+        const isTop = viewType === 'top';
+        const stepDeg = isTop ? 5 : 1;
+        const stepRad = stepDeg * Math.PI / 180;
 
-        this.applyBoxChanges();
-        this.updateYawDisplay();
+        const buttons = [
+            { label: '↺ 90°', delta: -Math.PI / 2, title: `Xoay -90° (${axisName})` },
+            { label: `↺ ${stepDeg}°`, delta: -stepRad, title: `Xoay -${stepDeg}° (${axisName})` },
+            { label: `↻ ${stepDeg}°`, delta: stepRad,  title: `Xoay +${stepDeg}° (${axisName})` },
+            { label: '↻ 90°', delta: Math.PI / 2,  title: `Xoay +90° (${axisName})` }
+        ];
+
+        buttons.forEach(({ label, delta, title }) => {
+            const btn = document.createElement('button');
+            btn.className = 'cvat-qaqc-rot-btn';
+            btn.textContent = label;
+            btn.title = title;
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                onRotate(delta);
+            });
+            group.appendChild(btn);
+        });
+
+        return group;
     }
 
     applyBoxChanges() {
@@ -397,7 +260,6 @@ export class FrameCard {
         }
 
         this.updateHeaderBadges();
-        this.flashStatus('● Đã cập nhật bộ nhớ CVAT');
 
         if (typeof this.onUpdateCuboid === 'function') {
             this.onUpdateCuboid(this.frame, this.data.points, this.data.box);
@@ -407,13 +269,7 @@ export class FrameCard {
     resetToOriginal() {
         this.data.box = { ...this.originalBox };
         this.data.points = [...this.originalPoints];
-
-        for (const k of ['x', 'y', 'z', 'sx', 'sy', 'sz']) {
-            this.updateStepDisplay(k);
-        }
-        this.updateYawDisplay();
         this.applyBoxChanges();
-        this.flashStatus('● Đã khôi phục ban đầu');
     }
 
     /**
@@ -428,11 +284,6 @@ export class FrameCard {
 
         this.updateHeaderBadges();
 
-        for (const k of ['x', 'y', 'z', 'sx', 'sy', 'sz']) {
-            this.updateStepDisplay(k);
-        }
-        this.updateYawDisplay();
-
         // Re-render views with existing point cloud data & options
         if (this.lastPointCloudData && this.lastRenderOptions) {
             this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
@@ -440,7 +291,7 @@ export class FrameCard {
             this.renderViews(null, this.isCurrent, this.lastRenderOptions || {
                 viewMode: 'all',
                 zoom: 1.0,
-                pointSize: 1.5
+                pointSize: 1.0
             });
         }
     }
@@ -462,8 +313,6 @@ export class FrameCard {
                 btn.innerHTML = origHTML;
             }, 1200);
         }
-
-        this.flashStatus(`● Đã copy size: ${res.sx} × ${res.sy} × ${res.sz}m`);
     }
 
     /**
@@ -472,7 +321,13 @@ export class FrameCard {
     async handlePasteSize(btn) {
         const size = await SizeClipboard.get();
         if (!size) {
-            this.flashStatus('⚠️ Chưa có size! Bấm Copy trước.');
+            if (btn) {
+                const origHTML = btn.innerHTML;
+                btn.innerHTML = '⚠️ Chưa có size!';
+                setTimeout(() => {
+                    btn.innerHTML = origHTML;
+                }, 1200);
+            }
             return;
         }
 
@@ -507,11 +362,7 @@ export class FrameCard {
         this.data.box.sy = parseFloat(sy.toFixed(3));
         this.data.box.sz = parseFloat(sz.toFixed(3));
 
-        for (const k of ['sx', 'sy', 'sz']) {
-            this.updateStepDisplay(k);
-        }
         this.applyBoxChanges();
-        this.flashStatus(`● Đã dán size: ${this.data.box.sx} × ${this.data.box.sy} × ${this.data.box.sz}m`);
         return true;
     }
 
@@ -523,10 +374,7 @@ export class FrameCard {
         if (!size && this.data.box) {
             size = SizeClipboard.copy(this.data.box);
         }
-        if (!size) {
-            this.flashStatus('⚠️ Không có kích thước để dán!');
-            return;
-        }
+        if (!size) return;
 
         if (typeof this.onPasteSizeToAll === 'function') {
             this.onPasteSizeToAll(size);
@@ -545,56 +393,35 @@ export class FrameCard {
         }
     }
 
-    flashStatus(text) {
-        if (this.statusNote) {
-            this.statusNote.textContent = text;
-            this.statusNote.classList.add('flash');
-            setTimeout(() => {
-                this.statusNote.classList.remove('flash');
-                this.statusNote.textContent = '● Lưu vào bộ nhớ CVAT (0 request)';
-            }, 2000);
-        }
-    }
-
-    updateStepDisplay(propKey) {
-        const item = this.valDisplays[propKey];
-        if (!item || !item.el) return;
-        const val = this.data.box?.[propKey] ?? 0;
-        item.el.textContent = `${item.label}: ${val.toFixed(2)}${item.unit}`;
-    }
-
-    updateYawDisplay() {
-        const el = this.valDisplays['yaw'];
-        if (!el) return;
-        const rz = this.data.box?.rz ?? 0;
-        const deg = ((rz * 180 / Math.PI) % 360).toFixed(1);
-        el.textContent = `θ: ${deg}°`;
-    }
-
     updateHeaderBadges() {
         const { box } = this.data;
         if (!box) return;
 
+        const toDegStr = (rad) => {
+            const deg = ((rad * 180 / Math.PI) % 360).toFixed(1);
+            return `${deg >= 0 ? '+' : ''}${deg}°`;
+        };
+
         if (this.yawBadge) {
             const rz = box.rz ?? 0;
-            const deg = ((rz * 180 / Math.PI) % 360).toFixed(1);
-            this.yawBadge.textContent = `Yaw: ${deg}°`;
+            this.yawBadge.textContent = `Yaw: ${toDegStr(rz)}`;
+        }
+
+        if (this.angleDisplays) {
+            if (this.angleDisplays.top) {
+                this.angleDisplays.top.textContent = toDegStr(box.rz ?? 0);
+            }
+            if (this.angleDisplays.side) {
+                this.angleDisplays.side.textContent = toDegStr(box.rx ?? 0);
+            }
+            if (this.angleDisplays.front) {
+                this.angleDisplays.front.textContent = toDegStr(box.ry ?? 0);
+            }
         }
 
         if (this.dimBadge) {
             const { sx = 2, sy = 4, sz = 1.5 } = box;
             this.dimBadge.textContent = `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
-        }
-    }
-
-    toggleEditPanel() {
-        const isOpen = this.editPanelEl.style.display !== 'none';
-        if (isOpen) {
-            this.editPanelEl.style.display = 'none';
-            this.editToggleBtn.classList.remove('active');
-        } else {
-            this.editPanelEl.style.display = 'flex';
-            this.editToggleBtn.classList.add('active');
         }
     }
 
@@ -960,10 +787,6 @@ export class FrameCard {
             };
             this.renderViews(this.lastPointCloudData, this.isCurrent, opts);
             this.updateHeaderBadges();
-            for (const k of ['x', 'y', 'z', 'sx', 'sy', 'sz']) {
-                this.updateStepDisplay(k);
-            }
-            this.updateYawDisplay();
         });
     }
 
@@ -982,7 +805,7 @@ export class FrameCard {
         const color = label?.color || '#30D158';
         const viewMode = options.viewMode || 'all'; // 'all', 'top', 'side', 'front'
         const zoom = options.zoom || 1.0;
-        const pointSize = options.pointSize || 1.5;
+        const pointSize = typeof options.pointSize === 'number' ? options.pointSize : 1.0;
 
         // Active frame highlight
         if (isCurrentFrame) {

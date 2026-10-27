@@ -407,8 +407,49 @@
 }
 
 /* Card Action Buttons */
-.cvat-qaqc-jump-btn,
-.cvat-qaqc-edit-toggle-btn {
+.cvat-qaqc-rot-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--macos-border);
+  border-radius: 4px;
+  padding: 1px 3px;
+  height: 22px;
+  box-sizing: border-box;
+}
+
+.cvat-qaqc-rot-btn {
+  height: 18px;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 500;
+  font-family: var(--macos-font);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  color: var(--macos-text-primary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: all 0.12s ease;
+  user-select: none;
+}
+
+.cvat-qaqc-rot-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #FFFFFF;
+}
+
+.cvat-qaqc-rot-btn:active {
+  background: rgba(10, 132, 255, 0.35);
+  color: var(--macos-accent);
+  transform: scale(0.95);
+}
+
+.cvat-qaqc-jump-btn {
   height: 22px;
   padding: 0 8px;
   font-size: 11px;
@@ -435,16 +476,6 @@
   transform: scale(0.97);
 }
 
-.cvat-qaqc-edit-toggle-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
-}
-
-.cvat-qaqc-edit-toggle-btn.active {
-  background: rgba(10, 132, 255, 0.22);
-  border-color: var(--macos-accent);
-  color: var(--macos-accent);
-}
-
 /* Card Jump Click Pulse Animation */
 .cvat-qaqc-card.jumping {
   animation: cardJumpPulse 0.35s ease-out;
@@ -454,157 +485,6 @@
   0% { transform: scale(1); }
   50% { transform: scale(1.008); box-shadow: 0 0 0 3px var(--macos-accent); }
   100% { transform: scale(1); }
-}
-
-/* In-Place Edit Panel */
-.cvat-qaqc-edit-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px 14px;
-  background: rgba(26, 26, 30, 0.95);
-  border-top: 1px solid var(--macos-border-subtle);
-  animation: slideDown 0.15s ease-out;
-}
-
-@keyframes slideDown {
-  from { opacity: 0; transform: translateY(-4px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-
-.cvat-qaqc-edit-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-start;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.cvat-qaqc-edit-label {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--macos-text-secondary);
-  width: 90px;
-  flex-shrink: 0;
-}
-
-.cvat-qaqc-edit-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-/* Stepper [-] [Value] [+] */
-.cvat-qaqc-stepper {
-  display: inline-flex;
-  align-items: center;
-  height: 22px;
-  background: rgba(0, 0, 0, 0.3);
-  border: 1px solid var(--macos-border);
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.cvat-qaqc-step-btn {
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(255, 255, 255, 0.05);
-  border: none;
-  color: #FFFFFF;
-  font-size: 13px;
-  font-weight: bold;
-  cursor: pointer;
-  transition: background 0.12s ease;
-}
-
-.cvat-qaqc-step-btn:hover {
-  background: rgba(255, 255, 255, 0.18);
-}
-
-.cvat-qaqc-step-btn:active {
-  background: rgba(10, 132, 255, 0.4);
-}
-
-.cvat-qaqc-step-val {
-  min-width: 78px;
-  padding: 0 4px;
-  text-align: center;
-  font-size: 10.5px;
-  font-family: monospace, var(--macos-font);
-  color: #FFFFFF;
-}
-
-/* Rotation Controls */
-.cvat-qaqc-yaw-val-text {
-  min-width: 60px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--macos-green);
-  font-family: monospace, var(--macos-font);
-}
-
-.cvat-qaqc-rot-btn {
-  height: 22px;
-  padding: 0 7px;
-  font-size: 10.5px;
-  font-weight: 500;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--macos-border);
-  color: var(--macos-text-primary);
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-
-.cvat-qaqc-rot-btn:hover {
-  background: rgba(48, 209, 88, 0.2);
-  border-color: rgba(48, 209, 88, 0.4);
-  color: #FFFFFF;
-}
-
-.cvat-qaqc-rot-btn:active {
-  transform: scale(0.97);
-}
-
-/* Footer / Status */
-.cvat-qaqc-edit-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding-top: 4px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-}
-
-.cvat-qaqc-edit-status-note {
-  font-size: 10.5px;
-  color: var(--macos-green);
-  transition: color 0.2s ease;
-}
-
-.cvat-qaqc-edit-status-note.flash {
-  color: #5E5CE6;
-  font-weight: 600;
-}
-
-.cvat-qaqc-reset-btn {
-  height: 20px;
-  padding: 0 8px;
-  font-size: 10.5px;
-  border-radius: 3px;
-  background: rgba(255, 69, 58, 0.12);
-  border: 1px solid rgba(255, 69, 58, 0.3);
-  color: #FF453A;
-  cursor: pointer;
-  transition: all 0.12s ease;
-}
-
-.cvat-qaqc-reset-btn:hover {
-  background: rgba(255, 69, 58, 0.25);
-  color: #FFFFFF;
 }
 
 /* Views Grid inside Card */
@@ -665,24 +545,63 @@
 }
 
 .cvat-qaqc-cell-header {
-  height: 18px;
-  line-height: 18px;
-  font-size: 10px;
-  font-weight: 600;
-  text-align: center;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
+  height: 22px;
+  padding: 0 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   background: rgba(30, 30, 35, 0.95);
   border-bottom: 1px solid var(--macos-border-subtle);
   color: var(--macos-text-secondary);
   user-select: none;
   flex-shrink: 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.cvat-qaqc-cell-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+.cvat-qaqc-cell-name {
+  color: var(--macos-text-primary);
+}
+
+.cvat-qaqc-cell-angle {
+  font-size: 9.5px;
+  font-family: monospace, var(--macos-font);
+  color: var(--macos-green);
+  font-weight: 600;
+}
+
+.cvat-qaqc-cell-header .cvat-qaqc-rot-group {
+  height: 18px;
+  padding: 0 2px;
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.cvat-qaqc-cell-header .cvat-qaqc-rot-btn {
+  height: 16px;
+  padding: 0 3px;
+  font-size: 8.5px;
+  border-radius: 2px;
+  line-height: 16px;
 }
 
 .cvat-qaqc-view-cell canvas {
   flex: 1;
   width: 100%;
-  height: calc(100% - 18px);
+  height: calc(100% - 22px);
   display: block;
   touch-action: none;
   user-select: none;

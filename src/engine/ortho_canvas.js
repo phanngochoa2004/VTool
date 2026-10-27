@@ -145,7 +145,7 @@ export class OrthoCanvasRenderer {
         // Subtle CVAT-style grid
         this.drawSubtleGrid(ctx, width, height);
 
-        const pointSize = options.pointSize || 1.5;
+        const pointSize = typeof options.pointSize === 'number' ? options.pointSize : 1.0;
 
         // 2. Subtle center crosshair lines
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.06)';

@@ -222,4 +222,68 @@ console.assert(redoSuccess === true, 'Redo executed successfully');
 console.assert(redoCalled === true, 'jobInstance.actions.redo() was called');
 console.log('✓ CVAT native Undo/Redo hook & Redux history synchronization passed');
 
+// 10. Test discrete rotation increments for Top (5°, 90°) and Side/Front (1°, 90°)
+const rotateAngle = (currentVal, deltaRad) => {
+    let nextVal = currentVal + deltaRad;
+    while (nextVal > Math.PI) nextVal -= Math.PI * 2;
+    while (nextVal < -Math.PI) nextVal += Math.PI * 2;
+    return parseFloat(nextVal.toFixed(4));
+};
+
+// Top: 5° and 90° increments
+let yaw = 0;
+yaw = rotateAngle(yaw, 5 * Math.PI / 180);
+console.assert(Math.abs(yaw - (5 * Math.PI / 180)) < 1e-4, 'Top +5 deg test');
+yaw = rotateAngle(yaw, Math.PI / 2);
+console.assert(Math.abs(yaw - (95 * Math.PI / 180)) < 1e-4, 'Top +90 deg test');
+yaw = rotateAngle(yaw, -Math.PI / 2);
+console.assert(Math.abs(yaw - (5 * Math.PI / 180)) < 1e-4, 'Top -90 deg test');
+yaw = rotateAngle(yaw, -5 * Math.PI / 180);
+console.assert(Math.abs(yaw - 0) < 1e-4, 'Top -5 deg test');
+
+// Side / Front: 1° and 90° increments
+let pitch = 0;
+pitch = rotateAngle(pitch, 1 * Math.PI / 180);
+console.assert(Math.abs(pitch - (1 * Math.PI / 180)) < 1e-4, 'Side/Front +1 deg test');
+pitch = rotateAngle(pitch, Math.PI / 2);
+console.assert(Math.abs(pitch - (91 * Math.PI / 180)) < 1e-4, 'Side/Front +90 deg test');
+pitch = rotateAngle(pitch, -Math.PI / 2);
+console.assert(Math.abs(pitch - (1 * Math.PI / 180)) < 1e-4, 'Side/Front -90 deg test');
+pitch = rotateAngle(pitch, -1 * Math.PI / 180);
+console.assert(Math.abs(pitch - 0) < 1e-4, 'Side/Front -1 deg test');
+console.log('✓ Discrete rotation increments (Top: 5°, 90°; Side/Front: 1°, 90°) passed');
+
+// 11. Test 3-axis rotation across Top (Yaw / rz), Side (Pitch / rx), and Front (Roll / ry)
+const rotateViewAxis = (box, viewType, deltaRad) => {
+    const propKey = viewType === 'top' ? 'rz' : (viewType === 'side' ? 'rx' : 'ry');
+    const current = typeof box[propKey] === 'number' ? box[propKey] : 0;
+    let nextVal = current + deltaRad;
+    while (nextVal > Math.PI) nextVal -= Math.PI * 2;
+    while (nextVal < -Math.PI) nextVal += Math.PI * 2;
+    box[propKey] = parseFloat(nextVal.toFixed(4));
+    return box;
+};
+
+const multiAxisBox = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 2, sy: 4, sz: 1.5 };
+
+// Top rotation affects rz (Yaw) only
+rotateViewAxis(multiAxisBox, 'top', 5 * Math.PI / 180);
+console.assert(Math.abs(multiAxisBox.rz - (5 * Math.PI / 180)) < 1e-4, 'Top rotation sets rz');
+console.assert(multiAxisBox.rx === 0 && multiAxisBox.ry === 0, 'Top rotation leaves rx and ry unchanged');
+
+// Side rotation affects rx (Pitch) only
+rotateViewAxis(multiAxisBox, 'side', 1 * Math.PI / 180);
+console.assert(Math.abs(multiAxisBox.rx - (1 * Math.PI / 180)) < 1e-4, 'Side rotation sets rx');
+console.assert(multiAxisBox.ry === 0, 'Side rotation leaves ry unchanged');
+
+// Front rotation affects ry (Roll) only
+rotateViewAxis(multiAxisBox, 'front', 90 * Math.PI / 180);
+console.assert(Math.abs(multiAxisBox.ry - (Math.PI / 2)) < 1e-4, 'Front rotation sets ry');
+
+// 180 flip on Side
+rotateViewAxis(multiAxisBox, 'side', Math.PI);
+console.assert(Math.abs(Math.abs(multiAxisBox.rx) - (Math.PI - 1 * Math.PI / 180)) < 1e-4, 'Side 180 flip normalized');
+
+console.log('✓ 3-Axis rotation (Top/Yaw, Side/Pitch, Front/Roll) passed');
+
 console.log('All Unit Tests Passed Successfully!');
