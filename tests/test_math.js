@@ -86,8 +86,8 @@ for (const viewType of ['top', 'side', 'front']) {
         const initialBox = { x: 14.2, y: -7.5, z: 2.1, rz: 0.52, sx: 2.2, sy: 4.6, sz: 1.7 };
         let dimH = 2.2, dimV = 4.6;
         if (viewType === 'top') { dimH = initialBox.sx; dimV = initialBox.sy; }
-        else if (viewType === 'side') { dimH = initialBox.sy; dimV = initialBox.sz; }
-        else if (viewType === 'front') { dimH = initialBox.sx; dimV = initialBox.sz; }
+        else if (viewType === 'front') { dimH = initialBox.sy; dimV = initialBox.sz; }
+        else if (viewType === 'side') { dimH = initialBox.sx; dimV = initialBox.sz; }
 
         const signU = (cornerKey === 'tr' || cornerKey === 'br') ? 1 : -1;
         const signV = (cornerKey === 'tl' || cornerKey === 'tr') ? 1 : -1;
@@ -98,8 +98,8 @@ for (const viewType of ['top', 'side', 'front']) {
         const rz0 = initialBox.rz;
         let init_lx = 0, init_ly = 0, init_lz = 0;
         if (viewType === 'top') { init_lx = oppLocalU; init_ly = oppLocalV; }
-        else if (viewType === 'side') { init_ly = oppLocalU; init_lz = oppLocalV; }
-        else if (viewType === 'front') { init_lx = oppLocalU; init_lz = oppLocalV; }
+        else if (viewType === 'front') { init_lx = 0; init_ly = oppLocalU; init_lz = oppLocalV; }
+        else if (viewType === 'side') { init_lx = -oppLocalU; init_ly = 0; init_lz = oppLocalV; }
 
         const initOppWorld = {
             x: initialBox.x + init_lx * Math.cos(rz0) - init_ly * Math.sin(rz0),
@@ -125,11 +125,11 @@ for (const viewType of ['top', 'side', 'front']) {
         if (viewType === 'top') {
             d_mid_lx = u_mid; d_mid_ly = v_mid;
             nextSx = newDimH; nextSy = newDimV;
-        } else if (viewType === 'side') {
+        } else if (viewType === 'front') {
             d_mid_ly = u_mid; d_mid_lz = v_mid;
             nextSy = newDimH; nextSz = newDimV;
-        } else if (viewType === 'front') {
-            d_mid_lx = u_mid; d_mid_lz = v_mid;
+        } else if (viewType === 'side') {
+            d_mid_lx = -u_mid; d_mid_lz = v_mid;
             nextSx = newDimH; nextSz = newDimV;
         }
 
@@ -149,8 +149,8 @@ for (const viewType of ['top', 'side', 'front']) {
         const newOppLocalV = -signV * (newDimV / 2);
         let new_lx = 0, new_ly = 0, new_lz = 0;
         if (viewType === 'top') { new_lx = newOppLocalU; new_ly = newOppLocalV; }
-        else if (viewType === 'side') { new_ly = newOppLocalU; new_lz = newOppLocalV; }
-        else if (viewType === 'front') { new_lx = newOppLocalU; new_lz = newOppLocalV; }
+        else if (viewType === 'front') { new_lx = 0; new_ly = newOppLocalU; new_lz = newOppLocalV; }
+        else if (viewType === 'side') { new_lx = -newOppLocalU; new_ly = 0; new_lz = newOppLocalV; }
 
         const newOppWorld = {
             x: newBox.x + new_lx * Math.cos(rz0) - new_ly * Math.sin(rz0),
@@ -253,9 +253,9 @@ pitch = rotateAngle(pitch, -1 * Math.PI / 180);
 console.assert(Math.abs(pitch - 0) < 1e-4, 'Side/Front -1 deg test');
 console.log('✓ Discrete rotation increments (Top: 5°, 90°; Side/Front: 1°, 90°) passed');
 
-// 11. Test 3-axis rotation across Top (Yaw / rz), Side (Pitch / rx), and Front (Roll / ry)
+// 11. Test 3-axis rotation across Top (Yaw / rz), Front (Roll / rx), and Side (Pitch / ry)
 const rotateViewAxis = (box, viewType, deltaRad) => {
-    const propKey = viewType === 'top' ? 'rz' : (viewType === 'side' ? 'rx' : 'ry');
+    const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
     const current = typeof box[propKey] === 'number' ? box[propKey] : 0;
     let nextVal = current + deltaRad;
     while (nextVal > Math.PI) nextVal -= Math.PI * 2;
@@ -271,20 +271,20 @@ rotateViewAxis(multiAxisBox, 'top', 5 * Math.PI / 180);
 console.assert(Math.abs(multiAxisBox.rz - (5 * Math.PI / 180)) < 1e-4, 'Top rotation sets rz');
 console.assert(multiAxisBox.rx === 0 && multiAxisBox.ry === 0, 'Top rotation leaves rx and ry unchanged');
 
-// Side rotation affects rx (Pitch) only
-rotateViewAxis(multiAxisBox, 'side', 1 * Math.PI / 180);
-console.assert(Math.abs(multiAxisBox.rx - (1 * Math.PI / 180)) < 1e-4, 'Side rotation sets rx');
-console.assert(multiAxisBox.ry === 0, 'Side rotation leaves ry unchanged');
+// Front rotation affects rx (Roll) only
+rotateViewAxis(multiAxisBox, 'front', 1 * Math.PI / 180);
+console.assert(Math.abs(multiAxisBox.rx - (1 * Math.PI / 180)) < 1e-4, 'Front rotation sets rx');
+console.assert(multiAxisBox.ry === 0, 'Front rotation leaves ry unchanged');
 
-// Front rotation affects ry (Roll) only
-rotateViewAxis(multiAxisBox, 'front', 90 * Math.PI / 180);
-console.assert(Math.abs(multiAxisBox.ry - (Math.PI / 2)) < 1e-4, 'Front rotation sets ry');
+// Side rotation affects ry (Pitch) only
+rotateViewAxis(multiAxisBox, 'side', 90 * Math.PI / 180);
+console.assert(Math.abs(multiAxisBox.ry - (Math.PI / 2)) < 1e-4, 'Side rotation sets ry');
 
-// 180 flip on Side
-rotateViewAxis(multiAxisBox, 'side', Math.PI);
-console.assert(Math.abs(Math.abs(multiAxisBox.rx) - (Math.PI - 1 * Math.PI / 180)) < 1e-4, 'Side 180 flip normalized');
+// 180 flip on Front
+rotateViewAxis(multiAxisBox, 'front', Math.PI);
+console.assert(Math.abs(Math.abs(multiAxisBox.rx) - (Math.PI - 1 * Math.PI / 180)) < 1e-4, 'Front 180 flip normalized');
 
-console.log('✓ 3-Axis rotation (Top/Yaw, Side/Pitch, Front/Roll) passed');
+console.log('✓ 3-Axis rotation (Top/Yaw, Front/Roll, Side/Pitch) passed');
 
 // 12. Test Outside frame retention and CVATHook.updateObjectOutside
 const mockTrackStates = {

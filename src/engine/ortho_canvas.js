@@ -25,18 +25,18 @@ export class OrthoCanvasRenderer {
 
         // Authentic CVAT projection conventions:
         // Top: Local X horizontal (sx), Local Y vertical (sy). Forward (+Y) points UP. Lateral (+X) points RIGHT.
-        // Side: Local Y horizontal (sy), Local Z vertical (sz). Length horizontal, Height vertical.
-        // Front: Local X horizontal (sx), Local Z vertical (sz). Width horizontal, Height vertical.
+        // Front: Looks from Red arrow (+X) towards -X. Green arrow (+Y) is on the RIGHT. Horizontal is sy, Vertical is sz.
+        // Side: Looks from Green arrow (+Y) towards -Y. Red arrow (+X) is on the LEFT. Horizontal is sx, Vertical is sz.
         let dimH = 2;
         let dimV = 4;
 
         if (viewType === 'top') {
             dimH = sx;
             dimV = sy;
-        } else if (viewType === 'side') {
+        } else if (viewType === 'front') {
             dimH = sy;
             dimV = sz;
-        } else if (viewType === 'front') {
+        } else if (viewType === 'side') {
             dimH = sx;
             dimV = sz;
         }
@@ -176,16 +176,16 @@ export class OrthoCanvasRenderer {
                     px = centerX + lx * scale;
                     py = centerY - ly * scale;
                     depth = (lz + sz / 2) / Math.max(0.01, sz);
-                } else if (viewType === 'side') {
-                    // Side: Local Y horizontal (sy), Local Z vertical (sz, +Z up)
+                } else if (viewType === 'front') {
+                    // Front: Look from red arrow (+X) towards -X. Green arrow (+Y) is on the RIGHT.
                     px = centerX + ly * scale;
                     py = centerY - lz * scale;
-                    depth = (lx + sx / 2) / Math.max(0.01, sx);
-                } else if (viewType === 'front') {
-                    // Front: Local X horizontal (sx), Local Z vertical (sz, +Z up)
-                    px = centerX + lx * scale;
+                    depth = (sx / 2 - lx) / Math.max(0.01, sx);
+                } else if (viewType === 'side') {
+                    // Side: Look from green arrow (+Y) towards -Y. Red arrow (+X) is on the LEFT.
+                    px = centerX - lx * scale;
                     py = centerY - lz * scale;
-                    depth = (ly + sy / 2) / Math.max(0.01, sy);
+                    depth = (sy / 2 - ly) / Math.max(0.01, sy);
                 }
 
                 if (px < 0 || px > width || py < 0 || py > height) continue;
@@ -272,7 +272,7 @@ export class OrthoCanvasRenderer {
             ctx.setLineDash([]);
         }
 
-        // 5. CVAT-style Heading & Rotation Helper (Top view only)
+        // 5. CVAT-style Heading & Rotation Helper
         if (viewType === 'top') {
             this.drawCVATHeadingHelper(
                 ctx,
@@ -285,6 +285,24 @@ export class OrthoCanvasRenderer {
                 isHoverRotation,
                 isActivelyRotating
             );
+        } else if (viewType === 'front') {
+            // Front view looks from red arrow (+X). Green arrow (+Y) is on the right.
+            ctx.strokeStyle = '#30D158';
+            ctx.lineWidth = 2.0;
+            ctx.beginPath();
+            ctx.moveTo(boxRight, boxTop);
+            ctx.lineTo(boxRight, boxBottom);
+            ctx.stroke();
+            this.drawArrow(ctx, boxRight, centerY, boxRight + 18, centerY, '#30D158', 6, 1.8);
+        } else if (viewType === 'side') {
+            // Side view looks from green arrow (+Y). Red arrow (+X) is on the left.
+            ctx.strokeStyle = '#FF3B30';
+            ctx.lineWidth = 2.0;
+            ctx.beginPath();
+            ctx.moveTo(boxLeft, boxTop);
+            ctx.lineTo(boxLeft, boxBottom);
+            ctx.stroke();
+            this.drawArrow(ctx, boxLeft, centerY, boxLeft - 18, centerY, '#FF3B30', 6, 1.8);
         }
 
         // 6. CVAT 4 Red Corner Handles (All views)
@@ -312,9 +330,9 @@ export class OrthoCanvasRenderer {
         let dimLabel = `${dimH.toFixed(2)}m × ${dimV.toFixed(2)}m`;
         if (viewType === 'top') {
             dimLabel = `W:${sx.toFixed(2)}  L:${sy.toFixed(2)}m`;
-        } else if (viewType === 'side') {
-            dimLabel = `L:${sy.toFixed(2)}  H:${sz.toFixed(2)}m`;
         } else if (viewType === 'front') {
+            dimLabel = `L:${sy.toFixed(2)}  H:${sz.toFixed(2)}m`;
+        } else if (viewType === 'side') {
             dimLabel = `W:${sx.toFixed(2)}  H:${sz.toFixed(2)}m`;
         }
         ctx.fillText(dimLabel, 6, height - 5);
