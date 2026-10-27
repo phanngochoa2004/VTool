@@ -49,8 +49,9 @@ const ALLOWED_SITES = [
     'https://app.cvat.ai',
     'https://cvat.ai',
 
-    // Hỗ trợ dạng tiền tố: khớp mọi site bắt đầu bằng https://cvat...
-    'https://cvat*',
+    // Custom CVAT Server instances
+    'https://cvat-test.vantixapps.net',
+    'https://cvat*'
 ];
 
 /**
@@ -3309,6 +3310,8 @@ class MacOSDock {
                 return;
             }
 
+            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
             if ((e.altKey || e.metaKey) && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q')) {
                 e.preventDefault();
                 this.toggleOpen();
@@ -3339,7 +3342,6 @@ class MacOSDock {
             }
 
             // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
-            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
             if (isCtrlOrCmd && !e.altKey) {
                 if ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
                     // Undo directly on CVAT & UI
