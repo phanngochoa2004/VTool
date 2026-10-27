@@ -1559,7 +1559,8 @@ class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const filter = this.activeFilterID !== null ? [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
                     const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
@@ -1635,7 +1636,8 @@ class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const filter = this.activeFilterID !== null ? [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
                     const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
@@ -1678,290 +1680,37 @@ class CVATHook {
     }
 
     /**
-     * Automate CVAT native Filters modal to isolate an ObjectID.
-     * This adds the rule: ObjectID == targetID into CVAT's native react-awesome-query-builder
-     * so that the sidebar shows "Items: 1", the top-bar Filters button becomes active (blue),
-     * and opening the native modal visibly shows the active rule.
-     * @param {number} targetID
-     * @returns {Promise<boolean>}
+     * Ensure CVAT's native FiltersModal dialog is closed/hidden so it never pops up in front of user
      */
-    async applyNativeFilterModal(targetID) {
-        if (typeof document === 'undefined') return false;
-        targetID = Number(targetID);
-        console.log(`[CVAT-QAQC] Automating CVAT native Filters modal for ObjectID #${targetID}...`);
-
-        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-
-        const findFiltersBtn = () => {
-            const byClass = document.querySelector('.cvat-annotation-header-filters-button, [class*="filters-button"], [class*="filter-button"]');
-            if (byClass) return byClass;
-            const withIcon = document.querySelector('.anticon-filter, [data-icon="filter"]');
-            if (withIcon) {
-                const btn = withIcon.closest('button') || withIcon.closest('.ant-btn') || withIcon.parentElement;
-                if (btn) return btn;
-            }
-            const topBar = document.querySelector('.cvat-annotation-header, .cvat-top-app-bar, header, #root header') || document.body;
-            const btns = topBar.querySelectorAll('button, .ant-btn');
-            for (const b of btns) {
-                if (b.textContent && b.textContent.trim().toLowerCase().includes('filter')) return b;
-            }
-            return null;
-        };
-
-        const findFiltersModal = () => {
-            const modals = document.querySelectorAll('.ant-modal-content');
-            for (const m of modals) {
-                const title = m.querySelector('.ant-modal-title')?.textContent || '';
-                if (title.toLowerCase().includes('filter')) return m;
-                if (m.querySelector('.ant-modal-body')?.textContent?.includes('Objects') &&
-                    m.querySelector('.ant-modal-body')?.textContent?.includes('Elements')) return m;
-            }
-            return null;
-        };
-
-        let modal = findFiltersModal();
-        const wasAlreadyOpen = !!modal;
-        let silencer = null;
-
-        // Open modal if not currently open
-        if (!modal) {
-            const btn = findFiltersBtn();
-            if (!btn) {
-                console.warn('[CVAT-QAQC] CVAT native Filters button not found');
-                return false;
-            }
-
-            // Silence modal visually while automating if it wasn't already open
-            silencer = document.createElement('style');
-            silencer.id = 'cvat-qaqc-filter-silencer';
-            silencer.textContent = `
-                .ant-modal-root {
-                    opacity: 0 !important;
-                    transform: scale(0.001) !important;
-                    pointer-events: auto !important;
-                }
-                .ant-modal-mask {
-                    opacity: 0 !important;
-                }
-            `;
-            document.head.appendChild(silencer);
-
+    closeFilterModalIfOpen() {
+        if (this.store) {
             try {
-                btn.click();
-            } catch (e) {
-                console.warn('[CVAT-QAQC] Error clicking Filters button:', e);
-            }
-
-            for (let i = 0; i < 12; i++) {
-                await sleep(50);
-                modal = findFiltersModal();
-                if (modal) break;
-            }
-
-            if (!modal) {
-                if (silencer) silencer.remove();
-                console.warn('[CVAT-QAQC] Filters modal did not appear');
-                return false;
-            }
-        }
-
-        try {
-            // 1. Clear any existing rules to ensure clean single-object isolation
-            const clearBtn = Array.from(modal.querySelectorAll('button')).find(b => 
-                b.textContent && b.textContent.toLowerCase().includes('clear')
-            );
-            if (clearBtn && !clearBtn.disabled) {
-                clearBtn.click();
-                await sleep(60);
-            }
-
-            // 2. Click "+ Add rule" under Objects (the first Add rule button)
-            const addRuleBtns = Array.from(modal.querySelectorAll('button')).filter(b => 
-                b.textContent && b.textContent.toLowerCase().includes('add rule')
-            );
-            if (addRuleBtns.length === 0) {
-                console.warn('[CVAT-QAQC] "+ Add rule" button not found in modal');
-                return false;
-            }
-
-            const objectsAddRuleBtn = addRuleBtns[0];
-            objectsAddRuleBtn.click();
-            await sleep(100);
-
-            // 3. Find the newly created rule row
-            let ruleRow = modal.querySelector('.rule:last-child, .group-or-rule-container:last-child, .rule');
-            if (!ruleRow) {
-                const selects = modal.querySelectorAll('.ant-select');
-                if (selects.length > 0) {
-                    ruleRow = selects[0].closest('.ant-row') || selects[0].parentElement?.parentElement || modal;
-                } else {
-                    ruleRow = modal;
-                }
-            }
-
-            // 4. Ensure Field is ObjectID
-            const fieldSelect = ruleRow.querySelector('.rule--field .ant-select, .ant-select');
-            if (fieldSelect) {
-                const curVal = fieldSelect.textContent || '';
-                if (!curVal.includes('ObjectID')) {
-                    const selector = fieldSelect.querySelector('.ant-select-selector') || fieldSelect;
-                    selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                    selector.click();
-                    await sleep(120);
-
-                    const dropdowns = document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)');
-                    let foundOpt = null;
-                    for (const dd of dropdowns) {
-                        const opts = dd.querySelectorAll('.ant-select-item-option, [role="option"], .ant-select-dropdown-menu-item');
-                        for (const opt of opts) {
-                            if (opt.textContent && opt.textContent.trim() === 'ObjectID') {
-                                foundOpt = opt;
-                                break;
-                            }
-                        }
-                        if (foundOpt) break;
-                    }
-
-                    if (foundOpt) {
-                        foundOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
-                        foundOpt.click();
-                        await sleep(100);
-                    }
-                }
-            }
-
-            // 5. Set targetID into value input
-            const valInput = ruleRow.querySelector('input.ant-input-number-input, input[type="number"], .rule--value input, input.ant-input, input');
-            if (valInput) {
-                valInput.focus();
-                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
-                if (nativeSetter) {
-                    nativeSetter.call(valInput, String(targetID));
-                } else {
-                    valInput.value = String(targetID);
-                }
-                valInput.dispatchEvent(new Event('input', { bubbles: true }));
-                valInput.dispatchEvent(new Event('change', { bubbles: true }));
-                valInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
-                valInput.dispatchEvent(new Event('blur', { bubbles: true }));
-                await sleep(80);
-            }
-
-            // 6. Click Submit
-            const submitBtn = Array.from(modal.querySelectorAll('button')).find(b => 
-                (b.textContent && b.textContent.trim().toLowerCase() === 'submit') || b.classList.contains('ant-btn-primary')
-            );
-            if (submitBtn) {
-                submitBtn.click();
-                console.log(`[CVAT-QAQC] Native Filters modal submitted successfully for ObjectID #${targetID}!`);
-                await sleep(80);
-                return true;
-            }
-            return false;
-        } finally {
-            if (silencer) silencer.remove();
-        }
-    }
-
-    /**
-     * Clear filters in CVAT native Filters modal to restore all objects
-     * @returns {Promise<boolean>}
-     */
-    async clearNativeFilterModal() {
-        if (typeof document === 'undefined') return false;
-        console.log('[CVAT-QAQC] Automating CVAT native Filters modal to clear all filters...');
-        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-
-        const findFiltersBtn = () => {
-            const byClass = document.querySelector('.cvat-annotation-header-filters-button, [class*="filters-button"], [class*="filter-button"]');
-            if (byClass) return byClass;
-            const withIcon = document.querySelector('.anticon-filter, [data-icon="filter"]');
-            if (withIcon) {
-                const btn = withIcon.closest('button') || withIcon.closest('.ant-btn') || withIcon.parentElement;
-                if (btn) return btn;
-            }
-            const topBar = document.querySelector('.cvat-annotation-header, .cvat-top-app-bar, header, #root header') || document.body;
-            const btns = topBar.querySelectorAll('button, .ant-btn');
-            for (const b of btns) {
-                if (b.textContent && b.textContent.trim().toLowerCase().includes('filter')) return b;
-            }
-            return null;
-        };
-
-        const findFiltersModal = () => {
-            const modals = document.querySelectorAll('.ant-modal-content');
-            for (const m of modals) {
-                const title = m.querySelector('.ant-modal-title')?.textContent || '';
-                if (title.toLowerCase().includes('filter')) return m;
-                if (m.querySelector('.ant-modal-body')?.textContent?.includes('Objects') &&
-                    m.querySelector('.ant-modal-body')?.textContent?.includes('Elements')) return m;
-            }
-            return null;
-        };
-
-        let modal = findFiltersModal();
-        let silencer = null;
-
-        if (!modal) {
-            const btn = findFiltersBtn();
-            if (!btn) return false;
-
-            silencer = document.createElement('style');
-            silencer.id = 'cvat-qaqc-filter-silencer';
-            silencer.textContent = `
-                .ant-modal-root {
-                    opacity: 0 !important;
-                    transform: scale(0.001) !important;
-                    pointer-events: auto !important;
-                }
-                .ant-modal-mask {
-                    opacity: 0 !important;
-                }
-            `;
-            document.head.appendChild(silencer);
-
-            try {
-                btn.click();
+                this.store.dispatch({
+                    type: 'SWITCH_SHOWING_FILTERS',
+                    payload: { visible: false }
+                });
             } catch (_) {}
-
-            for (let i = 0; i < 10; i++) {
-                await sleep(50);
-                modal = findFiltersModal();
-                if (modal) break;
-            }
         }
-
-        if (!modal) {
-            if (silencer) silencer.remove();
-            return false;
-        }
-
-        try {
-            const clearBtn = Array.from(modal.querySelectorAll('button')).find(b => 
-                b.textContent && b.textContent.toLowerCase().includes('clear')
-            );
-            if (clearBtn && !clearBtn.disabled) {
-                clearBtn.click();
-                await sleep(60);
-            }
-
-            const submitBtn = Array.from(modal.querySelectorAll('button')).find(b => 
-                (b.textContent && b.textContent.trim().toLowerCase() === 'submit') || b.classList.contains('ant-btn-primary')
-            );
-            if (submitBtn) {
-                submitBtn.click();
-                await sleep(60);
-                return true;
-            }
-            return false;
-        } finally {
-            if (silencer) silencer.remove();
+        if (typeof document !== 'undefined') {
+            try {
+                const cancelBtn = document.querySelector('.cvat-filters-modal-cancel-button');
+                if (cancelBtn) cancelBtn.click();
+                const silencer = document.getElementById('cvat-qaqc-filter-silencer');
+                if (silencer) silencer.remove();
+            } catch (_) {}
         }
     }
 
     /**
      * Filter CVAT workspace to only show the target object clientID.
-     * Hides all other objects from Three.js scene and objects sidebar to prevent lag.
+     * Uses CVAT's native JsonLogic query format: { "==": [{ "var": "objectID" }, targetID] }
+     * Dispatches CHANGE_ANNOTATIONS_FILTERS & FETCH_ANNOTATIONS_SUCCESS directly to Redux.
+     * This isolates the track in CVAT:
+     * - The Objects sidebar drops to "Items: 1"
+     * - Three.js Canvas3D removes all other tracks from the scene (zero lag)
+     * - Top-bar Filters button becomes active (filters-armed class)
+     * - Opening the native Filters modal cleanly renders "ObjectID == targetID" via react-awesome-query-builder
+     * - NO modal table pops up in front of user
      * @param {number} clientID
      * @returns {Promise<boolean>}
      */
@@ -1974,39 +1723,108 @@ class CVATHook {
         console.log(`[CVAT-QAQC] Filtering workspace to Object ID #${targetID} (isolating track)...`);
         this.activeFilterID = targetID;
 
-        // 1. Automate native CVAT Filters modal (updates native query builder, sidebar counter to 1, and modal contents)
-        try {
-            await this.applyNativeFilterModal(targetID);
-        } catch (e) {
-            console.warn('[CVAT-QAQC] Native Filters modal automation error:', e);
-        }
+        // 1. Ensure CVAT filter modal is closed
+        this.closeFilterModalIfOpen();
 
-        // 2. Immediate in-memory / Canvas / Redux isolation fallback
-        if (this.jobInstance) {
+        // 2. Build CVAT native JsonLogic filter for objectID
+        const filterLogic = { '==': [{ 'var': 'objectID' }, targetID] };
+        const filters = [filterLogic];
+
+        // 3. Dispatch CHANGE_ANNOTATIONS_FILTERS to CVAT Redux store
+        if (this.store) {
             try {
-                const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
-                for (const s of allStates) {
-                    if (typeof s.hidden !== 'undefined') {
-                        s.hidden = (s.clientID !== targetID);
+                this.store.dispatch({
+                    type: 'CHANGE_ANNOTATIONS_FILTERS',
+                    payload: {
+                        filters
                     }
-                }
-
-                const filteredStates = allStates.filter(s => s.clientID === targetID);
-
-                if (this.store) {
-                    const history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
-                    this.store.dispatch({
-                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
-                        payload: {
-                            states: filteredStates,
-                            history
-                        }
-                    });
-                }
-            } catch (err) {
-                console.warn('[CVAT-QAQC] Error in fallback state isolation:', err);
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error dispatching CHANGE_ANNOTATIONS_FILTERS:', e);
             }
         }
+
+        // 4. Query filtered states from CVAT job annotations using native JsonLogic filter
+        let filteredStates = [];
+        let history = null;
+        if (this.jobInstance) {
+            try {
+                history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                try {
+                    filteredStates = await this.jobInstance.annotations.get(this.currentFrame, true, filters);
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] annotations.get with filters error, fallback to client-side filter:', e);
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                }
+
+                if (!Array.isArray(filteredStates) || filteredStates.length === 0) {
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                }
+
+                // Hide all other states in-memory so Three.js drops draw calls immediately
+                try {
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    for (const s of allStates) {
+                        if (typeof s.hidden !== 'undefined') {
+                            s.hidden = (s.clientID !== targetID);
+                        }
+                    }
+                } catch (_) {}
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error in job annotations filter:', err);
+            }
+        }
+
+        // 5. Dispatch FETCH_ANNOTATIONS_SUCCESS & UPDATE_ANNOTATIONS_SUCCESS to update Redux & Objects sidebar
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'FETCH_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: filteredStates,
+                        intervals: [],
+                        history
+                    }
+                });
+                this.store.dispatch({
+                    type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: filteredStates,
+                        history
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error dispatching FETCH_ANNOTATIONS_SUCCESS:', e);
+            }
+        }
+
+        // 6. Update Canvas3D to immediately remove other objects from Three.js scene
+        if (this.canvasInstance && typeof this.canvasInstance.setup === 'function' && this.jobInstance) {
+            try {
+                const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                this.canvasInstance.setup(frameData, filteredStates);
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Canvas3D setup error:', e);
+            }
+        }
+
+        // 7. Update localStorage filters history so CVAT native modal shows it under Recently Used
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const historyStr = window.localStorage.getItem('annotationFiltersHistory')?.trim() || '[]';
+                let historyList = JSON.parse(historyStr);
+                if (!Array.isArray(historyList)) historyList = [];
+                const newEntry = {
+                    id: `qaqc-filter-${targetID}`,
+                    logic: filterLogic,
+                    keypointLogic: {}
+                };
+                historyList = [newEntry, ...historyList.filter(f => JSON.stringify(f.logic) !== JSON.stringify(filterLogic))].slice(0, 10);
+                window.localStorage.setItem('annotationFiltersHistory', JSON.stringify(historyList));
+            }
+        } catch (_) {}
 
         this.emit('filterChange', { clientID: targetID });
         return true;
@@ -2020,35 +1838,70 @@ class CVATHook {
         console.log('[CVAT-QAQC] Clearing object filter, restoring all objects...');
         this.activeFilterID = null;
 
-        // 1. Clear native modal filter
-        try {
-            await this.clearNativeFilterModal();
-        } catch (e) {
-            console.warn('[CVAT-QAQC] Native clear filter error:', e);
+        // 1. Ensure modal is closed
+        this.closeFilterModalIfOpen();
+
+        // 2. Dispatch CHANGE_ANNOTATIONS_FILTERS with empty array
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'CHANGE_ANNOTATIONS_FILTERS',
+                    payload: {
+                        filters: []
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error clearing CHANGE_ANNOTATIONS_FILTERS:', e);
+            }
         }
 
-        // 2. Restore all in-memory states and Redux store
+        // 3. Fetch all states and restore
+        let allStates = [];
+        let history = null;
         if (this.jobInstance) {
             try {
-                const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
                 for (const s of allStates) {
                     if (typeof s.hidden !== 'undefined') {
                         s.hidden = false;
                     }
                 }
-
-                if (this.store) {
-                    const history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
-                    this.store.dispatch({
-                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
-                        payload: {
-                            states: allStates,
-                            history
-                        }
-                    });
-                }
             } catch (err) {
                 console.warn('[CVAT-QAQC] Error restoring all object annotations:', err);
+            }
+        }
+
+        // 4. Dispatch FETCH_ANNOTATIONS_SUCCESS & UPDATE_ANNOTATIONS_SUCCESS
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'FETCH_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: allStates,
+                        intervals: [],
+                        history
+                    }
+                });
+                this.store.dispatch({
+                    type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: allStates,
+                        history
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error restoring Redux annotations on clear:', e);
+            }
+        }
+
+        // 5. Update Canvas3D to restore all objects in Three.js scene
+        if (this.canvasInstance && typeof this.canvasInstance.setup === 'function' && this.jobInstance) {
+            try {
+                const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                this.canvasInstance.setup(frameData, allStates);
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Canvas3D restore setup error:', e);
             }
         }
 

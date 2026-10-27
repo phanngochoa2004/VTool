@@ -376,7 +376,7 @@ hook.store = {
 hook.jobInstance = {
     annotations: {
         get: async (f, allTracks, filters) => {
-            if (filters && filters.length > 0 && filters[0].includes('clientID == 102')) {
+            if (filters && filters.length > 0 && JSON.stringify(filters[0]).includes('102')) {
                 return mockMultiObjectStates.filter(s => s.clientID === 102);
             }
             return mockMultiObjectStates;
