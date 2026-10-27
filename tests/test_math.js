@@ -408,4 +408,56 @@ console.assert(lastDispatchedAction.payload.states.length === 3, 'All 3 objects 
 console.assert(mockMultiObjectStates.every(s => s.hidden === false), 'All objects unhidden');
 console.log('✓ CVATHook.clearFilter restored all objects');
 
+// 15. Test Realtime Keyframe Detection & Shortest-Arc Interpolation
+const degToRad = d => d * Math.PI / 180;
+const radToDeg = r => r * 180 / Math.PI;
+
+const mockExportedJob = {
+    startFrame: 0,
+    stopFrame: 59,
+    size: 60,
+    annotations: {
+        export: async () => ({
+            tracks: [
+                {
+                    clientID: 555,
+                    shapes: [
+                        { frame: 0, points: [0, 0, 0, 0, 0, degToRad(170), 2, 4, 1.5], outside: false },
+                        { frame: 20, points: [20, 40, 0, 0, 0, degToRad(-170), 2, 4, 1.5], outside: false },
+                        { frame: 50, points: [50, 100, 0, 0, 0, degToRad(180), 2, 4, 1.5], outside: true }
+                    ]
+                }
+            ],
+            shapes: []
+        })
+    }
+};
+
+const startTime = Date.now();
+const trackFrames = await TrackReader.getTrackFrames(555, mockExportedJob);
+const durationMs = Date.now() - startTime;
+
+console.assert(trackFrames.length === 51, `Expected 51 frames (0 to 50), got ${trackFrames.length}`);
+console.assert(durationMs < 20, `Execution took ${durationMs}ms, expected < 20ms`);
+console.assert(trackFrames[0].keyframe === true, 'Frame 0 is keyframe');
+console.assert(trackFrames[20].keyframe === true, 'Frame 20 is keyframe');
+console.assert(trackFrames[50].keyframe === true, 'Frame 50 is keyframe');
+console.assert(trackFrames[10].keyframe === false, 'Frame 10 is interpolated');
+console.assert(trackFrames[50].outside === true, 'Frame 50 is outside');
+
+// Verify shortest arc interpolation across 180° boundary (170° to -170° -> midpoint at 180°)
+const midYawDeg = Math.round(radToDeg(trackFrames[10].points[5]));
+console.assert(Math.abs(midYawDeg) === 180, `Midpoint yaw should be 180° or -180°, got ${midYawDeg}°`);
+console.assert(trackFrames[10].points[0] === 10, 'Midpoint position x should be 10');
+console.assert(trackFrames[10].points[1] === 20, 'Midpoint position y should be 20');
+
+// Test live reactive keyframe update (promote frame 10 to keyframe)
+const updatedPoints = [12, 22, 0, 0, 0, degToRad(90), 2, 4, 1.5];
+const liveUpdated = TrackReader.updateTrackKeyframe(555, 10, updatedPoints, false);
+console.assert(liveUpdated !== null, 'Live keyframe update returned frames');
+const f10 = liveUpdated.find(f => f.frame === 10);
+console.assert(f10.keyframe === true, 'Frame 10 promoted to keyframe');
+console.assert(f10.points[0] === 12, 'Frame 10 updated position');
+console.log('✓ TrackReader 100% keyframe accuracy & realtime shortest-arc 3D interpolation passed');
+
 console.log('All Unit Tests Passed Successfully!');

@@ -74,12 +74,12 @@ export class FrameCard {
         frameSpan.textContent = `Frame ${this.frame}`;
         title.appendChild(frameSpan);
 
-        if (this.data.keyframe) {
-            const kfBadge = document.createElement('span');
-            kfBadge.className = 'cvat-qaqc-keyframe-badge';
-            kfBadge.textContent = 'Keyframe';
-            title.appendChild(kfBadge);
-        }
+        const kfBadge = document.createElement('span');
+        kfBadge.className = 'cvat-qaqc-keyframe-badge';
+        kfBadge.textContent = 'Keyframe';
+        kfBadge.style.display = this.data.keyframe ? 'inline-block' : 'none';
+        this.kfBadge = kfBadge;
+        title.appendChild(kfBadge);
 
         const currentBadge = document.createElement('span');
         currentBadge.className = 'cvat-qaqc-current-badge';
@@ -293,6 +293,7 @@ export class FrameCard {
 
     applyBoxChanges() {
         this.data.points = TrackReader.boxToPoints(this.data.box, this.data.points);
+        this.data.keyframe = true; // Editing an interpolated frame promotes it to a keyframe
 
         if (this.lastPointCloudData && this.lastRenderOptions) {
             this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
@@ -459,6 +460,10 @@ export class FrameCard {
         if (!box) return;
 
         const isOutside = !!this.data.outside;
+
+        if (this.kfBadge) {
+            this.kfBadge.style.display = this.data.keyframe ? 'inline-block' : 'none';
+        }
 
         if (this.outsideBadge) {
             this.outsideBadge.style.display = isOutside ? 'inline-block' : 'none';

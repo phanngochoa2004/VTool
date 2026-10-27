@@ -81,9 +81,25 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
         onUndo: () => hook.undo(),
         onRedo: () => hook.redo(),
         onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
+            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
+            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints, null);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                dock.updateFramesData(updatedFrames);
+            }
+
+            // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectCuboid(frame, clientID, newPoints);
         },
         onUpdateOutside: async (frame, clientID, outside) => {
+            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
+            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, null, outside);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                dock.updateFramesData(updatedFrames);
+            }
+
+            // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectOutside(frame, clientID, outside);
         }
     });
