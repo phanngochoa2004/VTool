@@ -531,10 +531,10 @@ export class FrameCard {
                 this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(box.rz ?? 0);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
+                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
+                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
             }
         }
 
@@ -697,11 +697,11 @@ export class FrameCard {
                 if (viewType === 'top') {
                     d_lx = d_h;
                     d_ly = d_v;
-                } else if (viewType === 'side') {
+                } else if (viewType === 'front') {
                     d_ly = d_h;
                     d_lz = d_v;
-                } else if (viewType === 'front') {
-                    d_lx = d_h;
+                } else if (viewType === 'side') {
+                    d_lx = -d_h;
                     d_lz = d_v;
                 }
 
@@ -746,13 +746,13 @@ export class FrameCard {
                     d_ly = v_mid;
                     nextSx = newDimH;
                     nextSy = newDimV;
-                } else if (viewType === 'side') {
+                } else if (viewType === 'front') {
                     d_ly = u_mid;
                     d_lz = v_mid;
                     nextSy = newDimH;
                     nextSz = newDimV;
-                } else if (viewType === 'front') {
-                    d_lx = u_mid;
+                } else if (viewType === 'side') {
+                    d_lx = -u_mid;
                     d_lz = v_mid;
                     nextSx = newDimH;
                     nextSz = newDimV;
@@ -779,9 +779,9 @@ export class FrameCard {
                 if (action === 'resize-left' || action === 'resize-right') {
                     const sign = action === 'resize-right' ? 1 : -1;
                     const deltaM = (dxPx / scale) * sign;
-                    if (viewType === 'top' || viewType === 'front') {
+                    if (viewType === 'top' || viewType === 'side') {
                         this.data.box.sx = Math.max(0.15, parseFloat(((this.data.box.sx || 1) + deltaM).toFixed(3)));
-                    } else if (viewType === 'side') {
+                    } else if (viewType === 'front') {
                         this.data.box.sy = Math.max(0.15, parseFloat(((this.data.box.sy || 1) + deltaM).toFixed(3)));
                     }
                 } else if (action === 'resize-top' || action === 'resize-bottom') {
