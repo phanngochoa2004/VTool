@@ -121,7 +121,11 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
             const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints, null);
             if (updatedFrames && updatedFrames.length > 0) {
                 currentTrackFrames = updatedFrames;
-                dock.updateFramesData(updatedFrames);
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
             }
 
             // Persist to CVAT in-memory AnnotationsCollection and sync Redux
@@ -132,7 +136,11 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
             const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, null, outside);
             if (updatedFrames && updatedFrames.length > 0) {
                 currentTrackFrames = updatedFrames;
-                dock.updateFramesData(updatedFrames);
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
             }
 
             // Persist to CVAT in-memory AnnotationsCollection and sync Redux

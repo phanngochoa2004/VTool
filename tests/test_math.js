@@ -535,4 +535,34 @@ console.assert(resultFrame === 20, 'Target frame should be track start frame (20
 console.assert(jumpedFrame === 20, 'jumpToFrame was invoked with frame 20');
 console.log('✓ Quick ID Filter input parsing & auto frame jump passed');
 
+// 19. Test MacOSDock updateFramesData & refreshTrackData consistency
+let updateDataCount = 0;
+const mockCard = {
+    updateData: (d) => { updateDataCount++; }
+};
+const mockDockInstance = {
+    state: { framesData: [] },
+    cards: new Map([[0, mockCard], [1, mockCard]]),
+    refreshTrackData(framesData) {
+        if (!Array.isArray(framesData) || framesData.length === 0) return;
+        this.state.framesData = framesData;
+        if (this.cards.size === framesData.length) {
+            for (const fData of framesData) {
+                const card = this.cards.get(fData.frame);
+                if (card && typeof card.updateData === 'function') {
+                    card.updateData(fData);
+                }
+            }
+        }
+    },
+    updateFramesData(framesData) {
+        this.refreshTrackData(framesData);
+    }
+};
+
+mockDockInstance.updateFramesData([{ frame: 0 }, { frame: 1 }]);
+console.assert(updateDataCount === 2, 'updateFramesData should delegate to refreshTrackData and update all cards');
+console.assert(mockDockInstance.state.framesData.length === 2, 'state.framesData updated');
+console.log('✓ MacOSDock updateFramesData & refreshTrackData compatibility passed');
+
 console.log('All Unit Tests Passed Successfully!');

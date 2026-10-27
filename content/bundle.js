@@ -4290,6 +4290,14 @@ class MacOSDock {
     }
 
     /**
+     * Update frames data across cards (alias for refreshTrackData for backward compatibility)
+     * @param {Array} framesData
+     */
+    updateFramesData(framesData) {
+        this.refreshTrackData(framesData);
+    }
+
+    /**
      * Update active frame highlight
      * @param {number} frameNumber
      * @param {any} pcdCache
@@ -4488,7 +4496,11 @@ class MacOSDock {
             const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints, null);
             if (updatedFrames && updatedFrames.length > 0) {
                 currentTrackFrames = updatedFrames;
-                dock.updateFramesData(updatedFrames);
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
             }
 
             // Persist to CVAT in-memory AnnotationsCollection and sync Redux
@@ -4499,7 +4511,11 @@ class MacOSDock {
             const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, null, outside);
             if (updatedFrames && updatedFrames.length > 0) {
                 currentTrackFrames = updatedFrames;
-                dock.updateFramesData(updatedFrames);
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
             }
 
             // Persist to CVAT in-memory AnnotationsCollection and sync Redux

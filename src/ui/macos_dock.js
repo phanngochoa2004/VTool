@@ -778,6 +778,14 @@ export class MacOSDock {
     }
 
     /**
+     * Update frames data across cards (alias for refreshTrackData for backward compatibility)
+     * @param {Array} framesData
+     */
+    updateFramesData(framesData) {
+        this.refreshTrackData(framesData);
+    }
+
+    /**
      * Update active frame highlight
      * @param {number} frameNumber
      * @param {any} pcdCache
