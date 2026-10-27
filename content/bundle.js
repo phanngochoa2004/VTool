@@ -3617,7 +3617,7 @@ class MacOSDock {
         iconSvg.appendChild(line);
 
         const titleSpan = document.createElement('span');
-        titleSpan.textContent = '3D QA/QC Inspector';
+        titleSpan.textContent = '3D QA/QC';
         title.appendChild(iconSvg);
         title.appendChild(titleSpan);
 
@@ -3634,23 +3634,28 @@ class MacOSDock {
         // Quick ID Filter Bar (Allows user to quickly filter by Object ID directly inside the dock)
         const filterBar = document.createElement('div');
         filterBar.className = 'cvat-qaqc-quick-filter-bar';
+        this.filterBar = filterBar;
+
+        const filterIcon = document.createElement('span');
+        filterIcon.className = 'cvat-qaqc-filter-icon';
+        filterIcon.textContent = '#';
 
         const filterInput = document.createElement('input');
         filterInput.type = 'text';
         filterInput.className = 'cvat-qaqc-quick-filter-input';
-        filterInput.placeholder = 'Lọc ID (vd: 102)...';
+        filterInput.placeholder = 'ID...';
         filterInput.title = 'Nhập Object ID cần lọc và ấn Enter';
         this.filterInput = filterInput;
 
         const filterBtn = document.createElement('button');
-        filterBtn.className = 'cvat-qaqc-btn cvat-qaqc-quick-filter-btn';
-        filterBtn.textContent = '🔍 Lọc';
+        filterBtn.className = 'cvat-qaqc-quick-filter-btn';
+        filterBtn.textContent = 'Lọc';
         filterBtn.title = 'Lọc chỉ hiển thị Object ID này (Enter)';
         this.quickFilterBtn = filterBtn;
 
         const clearFilterBtn = document.createElement('button');
-        clearFilterBtn.className = 'cvat-qaqc-btn cvat-qaqc-quick-clear-btn';
-        clearFilterBtn.textContent = '✕ Bỏ lọc';
+        clearFilterBtn.className = 'cvat-qaqc-quick-clear-btn';
+        clearFilterBtn.textContent = '✕';
         clearFilterBtn.title = 'Bỏ lọc, hiện lại toàn bộ đối tượng';
         clearFilterBtn.style.display = 'none';
         this.quickClearBtn = clearFilterBtn;
@@ -3679,7 +3684,7 @@ class MacOSDock {
                 }
             } finally {
                 filterBtn.disabled = false;
-                filterBtn.textContent = '🔍 Lọc';
+                filterBtn.textContent = 'Lọc';
             }
         };
 
@@ -3699,21 +3704,15 @@ class MacOSDock {
             filterInput.value = '';
         });
 
+        filterBar.appendChild(filterIcon);
         filterBar.appendChild(filterInput);
         filterBar.appendChild(filterBtn);
         filterBar.appendChild(clearFilterBtn);
-
-        // Filter Badge (Shows currently isolated/filtered Object ID)
-        const filterBadge = document.createElement('span');
-        filterBadge.className = 'cvat-qaqc-filter-badge';
-        filterBadge.style.display = 'none';
-        this.filterBadge = filterBadge;
 
         leftGroup.appendChild(title);
         leftGroup.appendChild(trackBadge);
         leftGroup.appendChild(framesBadge);
         leftGroup.appendChild(filterBar);
-        leftGroup.appendChild(filterBadge);
 
         // Right Controls
         const rightGroup = document.createElement('div');
@@ -3723,7 +3722,7 @@ class MacOSDock {
         const segmented = document.createElement('div');
         segmented.className = 'cvat-qaqc-segmented';
         const viewModes = [
-            { id: 'all', label: 'All 3 Views' },
+            { id: 'all', label: 'All 3' },
             { id: 'top', label: 'Top' },
             { id: 'front', label: 'Front' },
             { id: 'side', label: 'Side' }
@@ -3746,10 +3745,10 @@ class MacOSDock {
         orderSelect.title = 'Thứ tự các góc chiếu (Camera Order)';
         const currentOrderVal = this.state.viewOrder.join(',');
         [
-            { val: 'top,front,side', label: 'Cam: Top → Front → Side' },
-            { val: 'top,side,front', label: 'Cam: Top → Side → Front' },
-            { val: 'front,side,top', label: 'Cam: Front → Side → Top' },
-            { val: 'side,front,top', label: 'Cam: Side → Front → Top' }
+            { val: 'top,front,side', label: 'Top → Front → Side' },
+            { val: 'top,side,front', label: 'Top → Side → Front' },
+            { val: 'front,side,top', label: 'Front → Side → Top' },
+            { val: 'side,front,top', label: 'Side → Front → Top' }
         ].forEach(({ val, label }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -3771,9 +3770,9 @@ class MacOSDock {
         sizeSelect.style.colorScheme = 'dark';
         sizeSelect.title = 'Kích thước hiển thị các góc chiếu';
         [
-            { val: 'compact', label: 'Size: Nhỏ (Compact)' },
-            { val: 'medium', label: 'Size: Vừa (Medium)', selected: true },
-            { val: 'large', label: 'Size: Lớn (Large)' }
+            { val: 'compact', label: 'Size: Nhỏ' },
+            { val: 'medium', label: 'Size: Vừa', selected: true },
+            { val: 'large', label: 'Size: Lớn' }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -3792,13 +3791,13 @@ class MacOSDock {
         zoomSelect.className = 'cvat-qaqc-select';
         zoomSelect.style.colorScheme = 'dark';
         [
-            { val: '0.4', label: 'Zoom 40%' },
-            { val: '0.6', label: 'Zoom 60%' },
-            { val: '0.8', label: 'Zoom 80%' },
-            { val: '1.0', label: 'Zoom 100%', selected: true },
-            { val: '1.25', label: 'Zoom 125%' },
-            { val: '1.5', label: 'Zoom 150%' },
-            { val: '2.0', label: 'Zoom 200%' }
+            { val: '0.4', label: '40%' },
+            { val: '0.6', label: '60%' },
+            { val: '0.8', label: '80%' },
+            { val: '1.0', label: '100%', selected: true },
+            { val: '1.25', label: '125%' },
+            { val: '1.5', label: '150%' },
+            { val: '2.0', label: '200%' }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -3846,8 +3845,8 @@ class MacOSDock {
         // Copy Size Button (Active Frame / Cuboid)
         const copySizeBtn = document.createElement('button');
         copySizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-copy-size-btn';
-        copySizeBtn.textContent = '📋 Copy Size';
-        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn vào clipboard (Alt+Shift+C)';
+        copySizeBtn.textContent = '📋 Copy';
+        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn (Alt+Shift+C)';
         copySizeBtn.addEventListener('click', () => {
             const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
             if (activeCard) {
@@ -3857,10 +3856,10 @@ class MacOSDock {
                 if (domSize) {
                     SizeClipboard.copy(domSize);
                     copySizeBtn.classList.add('success-flash');
-                    copySizeBtn.textContent = '✓ Đã Copy!';
+                    copySizeBtn.textContent = '✓ Copy!';
                     setTimeout(() => {
                         copySizeBtn.classList.remove('success-flash');
-                        copySizeBtn.textContent = '📋 Copy Size';
+                        copySizeBtn.textContent = '📋 Copy';
                     }, 1200);
                 }
             }
@@ -3869,15 +3868,14 @@ class MacOSDock {
         // Jump to Active Frame Button
         const jumpBtn = document.createElement('button');
         jumpBtn.className = 'cvat-qaqc-btn';
-        jumpBtn.textContent = 'Jump to Active';
+        jumpBtn.textContent = '🎯 Active';
+        jumpBtn.title = 'Cuộn đến frame đang chọn trong CVAT';
         jumpBtn.addEventListener('click', () => this.scrollToActiveFrame());
 
         // Close / Hide Button (Collapses back to floating button)
         const hideBtn = document.createElement('button');
         hideBtn.className = 'cvat-qaqc-btn';
-        const hideSpan = document.createElement('span');
-        hideSpan.textContent = '✕ Ẩn / Hide';
-        hideBtn.appendChild(hideSpan);
+        hideBtn.textContent = '✕ Ẩn';
         hideBtn.title = 'Hide inspector (Alt + Q)';
         hideBtn.addEventListener('click', () => this.close());
 
@@ -4051,7 +4049,7 @@ class MacOSDock {
     }
 
     /**
-     * Update active filter badge and controls in the header
+     * Update active filter state and controls in the header
      * @param {number|null} clientID
      */
     setFilteredObjectID(clientID) {
@@ -4060,27 +4058,11 @@ class MacOSDock {
             if (clientID !== null && typeof clientID !== 'undefined') {
                 this.filterInput.value = String(clientID);
                 if (this.quickClearBtn) this.quickClearBtn.style.display = 'inline-flex';
+                if (this.filterBar) this.filterBar.classList.add('is-filtered');
             } else {
                 this.filterInput.value = '';
                 if (this.quickClearBtn) this.quickClearBtn.style.display = 'none';
-            }
-        }
-        if (this.filterBadge) {
-            if (clientID !== null && typeof clientID !== 'undefined') {
-                this.filterBadge.style.display = 'inline-flex';
-                this.filterBadge.innerHTML = `🔍 Lọc ID: <b>#${clientID}</b> <button class="cvat-qaqc-clear-filter-btn" title="Bỏ lọc, hiện lại toàn bộ đối tượng trong CVAT">✕ Bỏ lọc</button>`;
-                const clearBtn = this.filterBadge.querySelector('.cvat-qaqc-clear-filter-btn');
-                if (clearBtn) {
-                    clearBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        if (typeof this.callbacks.onClearFilter === 'function') {
-                            this.callbacks.onClearFilter();
-                        }
-                    });
-                }
-            } else {
-                this.filterBadge.style.display = 'none';
-                this.filterBadge.innerHTML = '';
+                if (this.filterBar) this.filterBar.classList.remove('is-filtered');
             }
         }
     }

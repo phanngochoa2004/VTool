@@ -146,20 +146,36 @@
 
 /* Toolbar */
 .cvat-qaqc-toolbar {
-  height: 38px;
-  padding: 0 16px;
+  height: 40px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
   border-bottom: 1px solid var(--macos-border-subtle);
   background: rgba(255, 255, 255, 0.02);
+  white-space: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  box-sizing: border-box;
+}
+
+.cvat-qaqc-toolbar::-webkit-scrollbar {
+  height: 3px;
+}
+
+.cvat-qaqc-toolbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
 }
 
 .cvat-qaqc-left-group,
 .cvat-qaqc-right-group {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cvat-qaqc-title {
@@ -169,6 +185,8 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cvat-qaqc-track-badge {
@@ -179,57 +197,28 @@
   background: rgba(10, 132, 255, 0.2);
   color: var(--macos-accent);
   border: 1px solid rgba(10, 132, 255, 0.3);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cvat-qaqc-frames-badge {
   font-size: 11px;
   color: var(--macos-text-secondary);
-}
-
-.cvat-qaqc-filter-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 7px;
-  border-radius: 4px;
-  background: rgba(10, 132, 255, 0.15);
-  color: #64D2FF;
-  border: 1px solid rgba(10, 132, 255, 0.35);
-}
-
-.cvat-qaqc-filter-badge b {
-  color: #FFFFFF;
-  font-weight: 600;
-}
-
-.cvat-qaqc-clear-filter-btn {
-  background: rgba(255, 69, 58, 0.2);
-  color: #FF453A;
-  border: 1px solid rgba(255, 69, 58, 0.35);
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 500;
-  padding: 1px 5px;
-  cursor: pointer;
-  transition: all 0.15s ease;
-}
-
-.cvat-qaqc-clear-filter-btn:hover {
-  background: rgba(255, 69, 58, 0.4);
-  color: #FFFFFF;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Quick ID Filter Bar inside Dock Toolbar */
 .cvat-qaqc-quick-filter-bar {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  background: rgba(0, 0, 0, 0.3);
+  gap: 3px;
+  background: rgba(0, 0, 0, 0.35);
   border: 1px solid var(--macos-border-subtle);
-  border-radius: 6px;
-  padding: 1px 3px;
+  border-radius: 5px;
+  padding: 1px 4px;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.2s ease;
 }
 
@@ -238,16 +227,35 @@
   box-shadow: 0 0 0 2px var(--macos-accent-glow);
 }
 
+.cvat-qaqc-quick-filter-bar.is-filtered {
+  border-color: rgba(10, 132, 255, 0.6);
+  background: rgba(10, 132, 255, 0.12);
+}
+
+.cvat-qaqc-filter-icon {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--macos-accent);
+  opacity: 0.8;
+  padding: 0 1px;
+  user-select: none;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .cvat-qaqc-quick-filter-input {
-  width: 95px;
+  width: 50px;
   height: 22px;
   background: transparent;
   border: none;
   color: var(--macos-text-primary);
   font-size: 11px;
+  font-weight: 500;
   font-family: var(--macos-font-mono, monospace);
-  padding: 0 4px;
+  padding: 0 2px;
   outline: none;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cvat-qaqc-quick-filter-input::placeholder {
@@ -261,33 +269,41 @@
   font-size: 10px;
   font-weight: 500;
   border-radius: 4px;
-  background: rgba(10, 132, 255, 0.2);
+  background: rgba(10, 132, 255, 0.25);
   color: #64D2FF;
-  border: 1px solid rgba(10, 132, 255, 0.35);
+  border: 1px solid rgba(10, 132, 255, 0.4);
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
 .cvat-qaqc-quick-filter-btn:hover {
-  background: rgba(10, 132, 255, 0.4);
+  background: rgba(10, 132, 255, 0.45);
   color: #FFFFFF;
 }
 
 .cvat-qaqc-quick-clear-btn {
   height: 20px;
-  padding: 0 6px;
+  width: 20px;
+  padding: 0;
   font-size: 10px;
-  font-weight: 500;
+  font-weight: 600;
   border-radius: 4px;
-  background: rgba(255, 69, 58, 0.2);
+  background: rgba(255, 69, 58, 0.25);
   color: #FF6961;
-  border: 1px solid rgba(255, 69, 58, 0.35);
+  border: 1px solid rgba(255, 69, 58, 0.4);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
 .cvat-qaqc-quick-clear-btn:hover {
-  background: rgba(255, 69, 58, 0.4);
+  background: rgba(255, 69, 58, 0.5);
   color: #FFFFFF;
 }
 
@@ -310,6 +326,8 @@
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.25);
   border: 1px solid var(--macos-border-subtle);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cvat-qaqc-seg-item {
@@ -325,6 +343,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
@@ -341,18 +361,20 @@
 /* macOS Standard Buttons */
 .cvat-qaqc-btn {
   height: 24px;
-  padding: 0 10px;
-  font-size: 12px;
-  font-weight: 400;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid var(--macos-border);
   color: var(--macos-text-primary);
-  display: flex;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 4px;
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.12s ease;
 }
 
@@ -372,7 +394,7 @@
 .cvat-qaqc-select {
   color-scheme: dark;
   height: 24px;
-  padding: 0 8px;
+  padding: 0 6px;
   font-size: 11px;
   font-family: var(--macos-font);
   border-radius: 5px;
@@ -381,6 +403,8 @@
   color: var(--macos-text-primary);
   cursor: pointer;
   outline: none;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.15s ease;
 }
 
@@ -587,6 +611,8 @@
   padding: 1px 3px;
   height: 22px;
   box-sizing: border-box;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .cvat-qaqc-rot-btn {
@@ -604,6 +630,8 @@
   align-items: center;
   justify-content: center;
   line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: all 0.12s ease;
   user-select: none;
 }
