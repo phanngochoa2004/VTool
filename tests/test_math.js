@@ -353,4 +353,59 @@ console.assert(isAllowedSite('http://127.0.0.1:8000') === false, '127.0.0.1:8000
 console.assert(isAllowedSite('https://google.com') === false, 'google.com must be rejected');
 console.log('✓ ALLOWED_SITES whitelist verification passed (0 regex, exact origin matching)');
 
+// 14. Test CVATHook.filterByObjectID & clearFilter (Target object isolation)
+const mockMultiObjectStates = [
+    { clientID: 101, hidden: false, points: [1, 2, 3, 0, 0, 0, 2, 4, 1.5] },
+    { clientID: 102, hidden: false, points: [4, 5, 6, 0, 0, 0, 2, 4, 1.5] },
+    { clientID: 103, hidden: false, points: [7, 8, 9, 0, 0, 0, 2, 4, 1.5] }
+];
+
+let lastDispatchedAction = null;
+hook.store = {
+    getState: () => ({
+        annotation: {
+            player: { frame: { number: 0 } },
+            annotations: { states: mockMultiObjectStates, filters: [] }
+        }
+    }),
+    dispatch: (action) => {
+        lastDispatchedAction = action;
+    }
+};
+
+hook.jobInstance = {
+    annotations: {
+        get: async (f, allTracks, filters) => {
+            if (filters && filters.length > 0 && filters[0].includes('clientID == 102')) {
+                return mockMultiObjectStates.filter(s => s.clientID === 102);
+            }
+            return mockMultiObjectStates;
+        }
+    },
+    actions: {
+        get: async () => ({})
+    }
+};
+
+// Filter to Object #102
+const filterSuccess = await hook.filterByObjectID(102);
+console.assert(filterSuccess === true, 'filterByObjectID returned true');
+console.assert(hook.activeFilterID === 102, 'activeFilterID set to 102');
+console.assert(lastDispatchedAction.type === 'UPDATE_ANNOTATIONS_SUCCESS', 'Dispatched UPDATE_ANNOTATIONS_SUCCESS');
+console.assert(lastDispatchedAction.payload.states.length === 1, 'Only 1 object returned in state');
+console.assert(lastDispatchedAction.payload.states[0].clientID === 102, 'Filtered state has clientID 102');
+console.assert(mockMultiObjectStates.find(s => s.clientID === 101).hidden === true, 'Object 101 marked as hidden');
+console.assert(mockMultiObjectStates.find(s => s.clientID === 102).hidden === false, 'Object 102 NOT hidden');
+console.assert(mockMultiObjectStates.find(s => s.clientID === 103).hidden === true, 'Object 103 marked as hidden');
+console.log('✓ CVATHook.filterByObjectID track isolation passed (other objects hidden)');
+
+// Clear filter
+const clearSuccess = await hook.clearFilter();
+console.assert(clearSuccess === true, 'clearFilter returned true');
+console.assert(hook.activeFilterID === null, 'activeFilterID reset to null');
+console.assert(lastDispatchedAction.type === 'UPDATE_ANNOTATIONS_SUCCESS', 'Dispatched UPDATE_ANNOTATIONS_SUCCESS on clear');
+console.assert(lastDispatchedAction.payload.states.length === 3, 'All 3 objects restored');
+console.assert(mockMultiObjectStates.every(s => s.hidden === false), 'All objects unhidden');
+console.log('✓ CVATHook.clearFilter restored all objects');
+
 console.log('All Unit Tests Passed Successfully!');

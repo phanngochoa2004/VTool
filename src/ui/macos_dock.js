@@ -128,9 +128,16 @@ export class MacOSDock {
         framesBadge.textContent = '0 frames';
         this.framesBadge = framesBadge;
 
+        // Filter Badge (Shows currently isolated/filtered Object ID)
+        const filterBadge = document.createElement('span');
+        filterBadge.className = 'cvat-qaqc-filter-badge';
+        filterBadge.style.display = 'none';
+        this.filterBadge = filterBadge;
+
         leftGroup.appendChild(title);
         leftGroup.appendChild(trackBadge);
         leftGroup.appendChild(framesBadge);
+        leftGroup.appendChild(filterBadge);
 
         // Right Controls
         const rightGroup = document.createElement('div');
@@ -440,13 +447,44 @@ export class MacOSDock {
         console.log(`[CVAT-QAQC] Pasted size (${size.sx} × ${size.sy} × ${size.sz}m) to ${updated} frames`);
     }
 
-    open() {
+    /**
+     * Update active filter badge and controls in the header
+     * @param {number|null} clientID
+     */
+    setFilteredObjectID(clientID) {
+        this.state.filteredClientID = clientID;
+        if (this.filterBadge) {
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                this.filterBadge.style.display = 'inline-flex';
+                this.filterBadge.innerHTML = `🔍 Lọc ID: <b>#${clientID}</b> <button class="cvat-qaqc-clear-filter-btn" title="Bỏ lọc, hiện lại toàn bộ đối tượng trong CVAT">✕ Bỏ lọc</button>`;
+                const clearBtn = this.filterBadge.querySelector('.cvat-qaqc-clear-filter-btn');
+                if (clearBtn) {
+                    clearBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (typeof this.callbacks.onClearFilter === 'function') {
+                            this.callbacks.onClearFilter();
+                        }
+                    });
+                }
+            } else {
+                this.filterBadge.style.display = 'none';
+                this.filterBadge.innerHTML = '';
+            }
+        }
+    }
+
+    async open() {
         this.isOpen = true;
         this.dom.classList.add('open');
         this.triggerEl.style.display = 'none'; // Hide trigger when drawer is active
-        if (typeof this.callbacks.onOpen === 'function') {
+
+        // Filter CVAT workspace to target object ID before performing other operations
+        if (typeof this.callbacks.onBeforeOpen === 'function') {
+            await this.callbacks.onBeforeOpen();
+        } else if (typeof this.callbacks.onOpen === 'function') {
             this.callbacks.onOpen();
         }
+
         this.refreshAllCards();
         this.scrollToActiveFrame();
     }
@@ -457,11 +495,11 @@ export class MacOSDock {
         this.triggerEl.style.display = 'flex'; // Restore trigger button
     }
 
-    toggleOpen() {
+    async toggleOpen() {
         if (this.isOpen) {
             this.close();
         } else {
-            this.open();
+            await this.open();
         }
     }
 
@@ -622,16 +660,31 @@ export class MacOSDock {
      * @param {any} pcdCache
      */
     updateActiveFrame(frameNumber, pcdCache) {
+        const prevFrame = this.state.currentFrame;
         this.state.currentFrame = frameNumber;
         this.pcdCache = pcdCache;
 
-        for (const [f, card] of this.cards.entries()) {
-            const pts = pcdCache?.get(f);
-            card.renderViews(pts, f === frameNumber, {
-                viewMode: this.state.viewMode,
-                zoom: this.state.zoom,
-                pointSize: this.state.pointSize
-            });
+        // Fast toggle of active classes on previous and current cards
+        if (prevFrame !== null && prevFrame !== frameNumber) {
+            const prevCard = this.cards.get(prevFrame);
+            if (prevCard && typeof prevCard.setActive === 'function') {
+                prevCard.setActive(false);
+            }
+        }
+
+        const currentCard = this.cards.get(frameNumber);
+        if (currentCard) {
+            if (typeof currentCard.setActive === 'function') {
+                currentCard.setActive(true);
+            }
+            const pts = pcdCache?.get(frameNumber);
+            if (pts) {
+                currentCard.renderViews(pts, true, {
+                    viewMode: this.state.viewMode,
+                    zoom: this.state.zoom,
+                    pointSize: this.state.pointSize
+                });
+            }
         }
 
         if (this.isOpen) {

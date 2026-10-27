@@ -20,8 +20,43 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
     const pcdCache = new PCDCache();
     const hook = new CVATHook();
 
+    let currentTrackFrames = [];
+    let currentClientID = null;
+
     const dock = new MacOSDock({
+        onBeforeOpen: async () => {
+            // Khi nhấn bật UI extension, thực hiện filter object ID đúng ID đó TRƯỚC KHI xử lý các tác vụ khác
+            const clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                console.log(`[CVAT-QAQC] UI Extension opened. Filtering workspace to Object ID #${clientID} FIRST...`);
+                await hook.filterByObjectID(clientID);
+                dock.setFilteredObjectID(clientID);
+
+                // Nạp frames cho track này nếu chưa nạp
+                if (hook.jobInstance && (currentClientID !== clientID || currentTrackFrames.length === 0)) {
+                    try {
+                        currentClientID = clientID;
+                        currentTrackFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
+                        dock.updateTrack(clientID, currentTrackFrames, hook.currentFrame, pcdCache);
+                        const frameNumbers = currentTrackFrames.map(f => f.frame);
+                        pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                            dock.updateCardPointCloud(loadedFrame, pts);
+                        });
+                    } catch (err) {
+                        console.warn('[CVAT-QAQC] Error loading track frames in onBeforeOpen:', err);
+                    }
+                }
+            }
+        },
         onOpen: () => hook.refreshActiveObject(),
+        onFilterObject: async (id) => {
+            await hook.filterByObjectID(id);
+            dock.setFilteredObjectID(id);
+        },
+        onClearFilter: async () => {
+            await hook.clearFilter();
+            dock.setFilteredObjectID(null);
+        },
         onJumpToFrame: (f) => hook.jumpToFrame(f),
         onUndo: () => hook.undo(),
         onRedo: () => hook.redo(),
@@ -32,9 +67,6 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
             await hook.updateObjectOutside(frame, clientID, outside);
         }
     });
-
-    let currentTrackFrames = [];
-    let currentClientID = null;
 
     // Listen for object selection change (track or shape)
     hook.on('objectChange', async ({ clientID, job, canvas, frame }) => {
@@ -47,7 +79,15 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
         if (clientID === null) {
             currentTrackFrames = [];
             dock.updateTrack(null, [], frame, pcdCache);
+            dock.setFilteredObjectID(null);
             return;
+        }
+
+        // Nếu Dock đang mở và người dùng click vào track mới, tự động lọc ngay sang track ID mới này
+        if (dock.isOpen) {
+            console.log(`[CVAT-QAQC] Dock is active. Auto-filtering workspace to newly clicked Track #${clientID}...`);
+            await hook.filterByObjectID(clientID);
+            dock.setFilteredObjectID(clientID);
         }
 
         console.log(`[CVAT-QAQC] Selected Object / Track #${clientID}. Extracting all frames in-memory...`);

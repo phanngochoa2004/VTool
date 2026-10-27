@@ -875,6 +875,21 @@ export class FrameCard {
     }
 
     /**
+     * Fast toggle of active frame border and badge without expensive canvas re-render
+     * @param {boolean} isCurrentFrame
+     */
+    setActive(isCurrentFrame) {
+        this.isCurrent = !!isCurrentFrame;
+        if (isCurrentFrame) {
+            this.dom.classList.add('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'inline-block';
+        } else {
+            this.dom.classList.remove('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'none';
+        }
+    }
+
+    /**
      * Render or refresh canvas projections in CVAT order (Top, Side, Front)
      * @param {{ positions: Float32Array, stride: number } | null} pointCloudData
      * @param {boolean} isCurrentFrame

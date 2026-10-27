@@ -1213,13 +1213,15 @@ class CVATHook {
         this.jobInstance = null;
         this.canvasInstance = null;
         this.activeClientID = null;
+        this.activeFilterID = null;
         this.currentFrame = 0;
         this.listeners = {
             objectChange: [],
             frameChange: [],
             canvasReady: [],
             objectUpdated: [],
-            historyChange: []
+            historyChange: [],
+            filterChange: []
         };
         this.isHooked = false;
         this._undoRedoLock = false;
@@ -1327,6 +1329,25 @@ class CVATHook {
         const canvas = state.annotation.canvas?.instance;
         if (canvas && typeof canvas.activatedElementID === 'number') {
             return canvas.activatedElementID;
+        }
+
+        // 3.5 Check active or selected item in DOM objects sidebar
+        if (typeof document !== 'undefined') {
+            try {
+                const activeItem = document.querySelector(
+                    '[class*="objects-sidebar-state-item"][class*="active"], ' +
+                    '.cvat-objects-sidebar-state-item-active, ' +
+                    '[id^="cvat-objects-sidebar-state-item-"].active, ' +
+                    '[id^="cvat-objects-sidebar-state-item-"]:focus-within'
+                );
+                if (activeItem) {
+                    const idMatch = (activeItem.id || '').match(/cvat-objects-sidebar-state-item-(\d+)/);
+                    if (idMatch) return parseInt(idMatch[1], 10);
+                    const numText = activeItem.querySelector('[class*="number"]')?.textContent?.trim() ||
+                                   activeItem.querySelector('span')?.textContent?.match(/#(\d+)/)?.[1];
+                    if (numText && !isNaN(parseInt(numText, 10))) return parseInt(numText, 10);
+                }
+            } catch (_) {}
         }
 
         // 4. Auto-detect: if on current frame there is a 3D cuboid, auto-select it!
@@ -1539,10 +1560,11 @@ class CVATHook {
                 try {
                     const history = await this.jobInstance.actions.get();
                     const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
                         payload: {
-                            states: freshStates,
+                            states: statesToPush,
                             history
                         }
                     });
@@ -1614,10 +1636,11 @@ class CVATHook {
                 try {
                     const history = await this.jobInstance.actions.get();
                     const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
                         payload: {
-                            states: freshStates,
+                            states: statesToPush,
                             history
                         }
                     });
@@ -1652,6 +1675,385 @@ class CVATHook {
             console.error('[CVAT-QAQC] Failed to update in-memory outside:', err);
             return false;
         }
+    }
+
+    /**
+     * Automate CVAT native Filters modal to isolate an ObjectID.
+     * This adds the rule: ObjectID == targetID into CVAT's native react-awesome-query-builder
+     * so that the sidebar shows "Items: 1", the top-bar Filters button becomes active (blue),
+     * and opening the native modal visibly shows the active rule.
+     * @param {number} targetID
+     * @returns {Promise<boolean>}
+     */
+    async applyNativeFilterModal(targetID) {
+        if (typeof document === 'undefined') return false;
+        targetID = Number(targetID);
+        console.log(`[CVAT-QAQC] Automating CVAT native Filters modal for ObjectID #${targetID}...`);
+
+        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+        const findFiltersBtn = () => {
+            const byClass = document.querySelector('.cvat-annotation-header-filters-button, [class*="filters-button"], [class*="filter-button"]');
+            if (byClass) return byClass;
+            const withIcon = document.querySelector('.anticon-filter, [data-icon="filter"]');
+            if (withIcon) {
+                const btn = withIcon.closest('button') || withIcon.closest('.ant-btn') || withIcon.parentElement;
+                if (btn) return btn;
+            }
+            const topBar = document.querySelector('.cvat-annotation-header, .cvat-top-app-bar, header, #root header') || document.body;
+            const btns = topBar.querySelectorAll('button, .ant-btn');
+            for (const b of btns) {
+                if (b.textContent && b.textContent.trim().toLowerCase().includes('filter')) return b;
+            }
+            return null;
+        };
+
+        const findFiltersModal = () => {
+            const modals = document.querySelectorAll('.ant-modal-content');
+            for (const m of modals) {
+                const title = m.querySelector('.ant-modal-title')?.textContent || '';
+                if (title.toLowerCase().includes('filter')) return m;
+                if (m.querySelector('.ant-modal-body')?.textContent?.includes('Objects') &&
+                    m.querySelector('.ant-modal-body')?.textContent?.includes('Elements')) return m;
+            }
+            return null;
+        };
+
+        let modal = findFiltersModal();
+        const wasAlreadyOpen = !!modal;
+        let silencer = null;
+
+        // Open modal if not currently open
+        if (!modal) {
+            const btn = findFiltersBtn();
+            if (!btn) {
+                console.warn('[CVAT-QAQC] CVAT native Filters button not found');
+                return false;
+            }
+
+            // Silence modal visually while automating if it wasn't already open
+            silencer = document.createElement('style');
+            silencer.id = 'cvat-qaqc-filter-silencer';
+            silencer.textContent = `
+                .ant-modal-root {
+                    opacity: 0 !important;
+                    transform: scale(0.001) !important;
+                    pointer-events: auto !important;
+                }
+                .ant-modal-mask {
+                    opacity: 0 !important;
+                }
+            `;
+            document.head.appendChild(silencer);
+
+            try {
+                btn.click();
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error clicking Filters button:', e);
+            }
+
+            for (let i = 0; i < 12; i++) {
+                await sleep(50);
+                modal = findFiltersModal();
+                if (modal) break;
+            }
+
+            if (!modal) {
+                if (silencer) silencer.remove();
+                console.warn('[CVAT-QAQC] Filters modal did not appear');
+                return false;
+            }
+        }
+
+        try {
+            // 1. Clear any existing rules to ensure clean single-object isolation
+            const clearBtn = Array.from(modal.querySelectorAll('button')).find(b => 
+                b.textContent && b.textContent.toLowerCase().includes('clear')
+            );
+            if (clearBtn && !clearBtn.disabled) {
+                clearBtn.click();
+                await sleep(60);
+            }
+
+            // 2. Click "+ Add rule" under Objects (the first Add rule button)
+            const addRuleBtns = Array.from(modal.querySelectorAll('button')).filter(b => 
+                b.textContent && b.textContent.toLowerCase().includes('add rule')
+            );
+            if (addRuleBtns.length === 0) {
+                console.warn('[CVAT-QAQC] "+ Add rule" button not found in modal');
+                return false;
+            }
+
+            const objectsAddRuleBtn = addRuleBtns[0];
+            objectsAddRuleBtn.click();
+            await sleep(100);
+
+            // 3. Find the newly created rule row
+            let ruleRow = modal.querySelector('.rule:last-child, .group-or-rule-container:last-child, .rule');
+            if (!ruleRow) {
+                const selects = modal.querySelectorAll('.ant-select');
+                if (selects.length > 0) {
+                    ruleRow = selects[0].closest('.ant-row') || selects[0].parentElement?.parentElement || modal;
+                } else {
+                    ruleRow = modal;
+                }
+            }
+
+            // 4. Ensure Field is ObjectID
+            const fieldSelect = ruleRow.querySelector('.rule--field .ant-select, .ant-select');
+            if (fieldSelect) {
+                const curVal = fieldSelect.textContent || '';
+                if (!curVal.includes('ObjectID')) {
+                    const selector = fieldSelect.querySelector('.ant-select-selector') || fieldSelect;
+                    selector.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                    selector.click();
+                    await sleep(120);
+
+                    const dropdowns = document.querySelectorAll('.ant-select-dropdown:not(.ant-select-dropdown-hidden)');
+                    let foundOpt = null;
+                    for (const dd of dropdowns) {
+                        const opts = dd.querySelectorAll('.ant-select-item-option, [role="option"], .ant-select-dropdown-menu-item');
+                        for (const opt of opts) {
+                            if (opt.textContent && opt.textContent.trim() === 'ObjectID') {
+                                foundOpt = opt;
+                                break;
+                            }
+                        }
+                        if (foundOpt) break;
+                    }
+
+                    if (foundOpt) {
+                        foundOpt.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+                        foundOpt.click();
+                        await sleep(100);
+                    }
+                }
+            }
+
+            // 5. Set targetID into value input
+            const valInput = ruleRow.querySelector('input.ant-input-number-input, input[type="number"], .rule--value input, input.ant-input, input');
+            if (valInput) {
+                valInput.focus();
+                const nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set;
+                if (nativeSetter) {
+                    nativeSetter.call(valInput, String(targetID));
+                } else {
+                    valInput.value = String(targetID);
+                }
+                valInput.dispatchEvent(new Event('input', { bubbles: true }));
+                valInput.dispatchEvent(new Event('change', { bubbles: true }));
+                valInput.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Enter', code: 'Enter', keyCode: 13 }));
+                valInput.dispatchEvent(new Event('blur', { bubbles: true }));
+                await sleep(80);
+            }
+
+            // 6. Click Submit
+            const submitBtn = Array.from(modal.querySelectorAll('button')).find(b => 
+                (b.textContent && b.textContent.trim().toLowerCase() === 'submit') || b.classList.contains('ant-btn-primary')
+            );
+            if (submitBtn) {
+                submitBtn.click();
+                console.log(`[CVAT-QAQC] Native Filters modal submitted successfully for ObjectID #${targetID}!`);
+                await sleep(80);
+                return true;
+            }
+            return false;
+        } finally {
+            if (silencer) silencer.remove();
+        }
+    }
+
+    /**
+     * Clear filters in CVAT native Filters modal to restore all objects
+     * @returns {Promise<boolean>}
+     */
+    async clearNativeFilterModal() {
+        if (typeof document === 'undefined') return false;
+        console.log('[CVAT-QAQC] Automating CVAT native Filters modal to clear all filters...');
+        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+
+        const findFiltersBtn = () => {
+            const byClass = document.querySelector('.cvat-annotation-header-filters-button, [class*="filters-button"], [class*="filter-button"]');
+            if (byClass) return byClass;
+            const withIcon = document.querySelector('.anticon-filter, [data-icon="filter"]');
+            if (withIcon) {
+                const btn = withIcon.closest('button') || withIcon.closest('.ant-btn') || withIcon.parentElement;
+                if (btn) return btn;
+            }
+            const topBar = document.querySelector('.cvat-annotation-header, .cvat-top-app-bar, header, #root header') || document.body;
+            const btns = topBar.querySelectorAll('button, .ant-btn');
+            for (const b of btns) {
+                if (b.textContent && b.textContent.trim().toLowerCase().includes('filter')) return b;
+            }
+            return null;
+        };
+
+        const findFiltersModal = () => {
+            const modals = document.querySelectorAll('.ant-modal-content');
+            for (const m of modals) {
+                const title = m.querySelector('.ant-modal-title')?.textContent || '';
+                if (title.toLowerCase().includes('filter')) return m;
+                if (m.querySelector('.ant-modal-body')?.textContent?.includes('Objects') &&
+                    m.querySelector('.ant-modal-body')?.textContent?.includes('Elements')) return m;
+            }
+            return null;
+        };
+
+        let modal = findFiltersModal();
+        let silencer = null;
+
+        if (!modal) {
+            const btn = findFiltersBtn();
+            if (!btn) return false;
+
+            silencer = document.createElement('style');
+            silencer.id = 'cvat-qaqc-filter-silencer';
+            silencer.textContent = `
+                .ant-modal-root {
+                    opacity: 0 !important;
+                    transform: scale(0.001) !important;
+                    pointer-events: auto !important;
+                }
+                .ant-modal-mask {
+                    opacity: 0 !important;
+                }
+            `;
+            document.head.appendChild(silencer);
+
+            try {
+                btn.click();
+            } catch (_) {}
+
+            for (let i = 0; i < 10; i++) {
+                await sleep(50);
+                modal = findFiltersModal();
+                if (modal) break;
+            }
+        }
+
+        if (!modal) {
+            if (silencer) silencer.remove();
+            return false;
+        }
+
+        try {
+            const clearBtn = Array.from(modal.querySelectorAll('button')).find(b => 
+                b.textContent && b.textContent.toLowerCase().includes('clear')
+            );
+            if (clearBtn && !clearBtn.disabled) {
+                clearBtn.click();
+                await sleep(60);
+            }
+
+            const submitBtn = Array.from(modal.querySelectorAll('button')).find(b => 
+                (b.textContent && b.textContent.trim().toLowerCase() === 'submit') || b.classList.contains('ant-btn-primary')
+            );
+            if (submitBtn) {
+                submitBtn.click();
+                await sleep(60);
+                return true;
+            }
+            return false;
+        } finally {
+            if (silencer) silencer.remove();
+        }
+    }
+
+    /**
+     * Filter CVAT workspace to only show the target object clientID.
+     * Hides all other objects from Three.js scene and objects sidebar to prevent lag.
+     * @param {number} clientID
+     * @returns {Promise<boolean>}
+     */
+    async filterByObjectID(clientID) {
+        if (clientID === null || typeof clientID === 'undefined') {
+            return this.clearFilter();
+        }
+
+        const targetID = Number(clientID);
+        console.log(`[CVAT-QAQC] Filtering workspace to Object ID #${targetID} (isolating track)...`);
+        this.activeFilterID = targetID;
+
+        // 1. Automate native CVAT Filters modal (updates native query builder, sidebar counter to 1, and modal contents)
+        try {
+            await this.applyNativeFilterModal(targetID);
+        } catch (e) {
+            console.warn('[CVAT-QAQC] Native Filters modal automation error:', e);
+        }
+
+        // 2. Immediate in-memory / Canvas / Redux isolation fallback
+        if (this.jobInstance) {
+            try {
+                const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                for (const s of allStates) {
+                    if (typeof s.hidden !== 'undefined') {
+                        s.hidden = (s.clientID !== targetID);
+                    }
+                }
+
+                const filteredStates = allStates.filter(s => s.clientID === targetID);
+
+                if (this.store) {
+                    const history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: {
+                            states: filteredStates,
+                            history
+                        }
+                    });
+                }
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error in fallback state isolation:', err);
+            }
+        }
+
+        this.emit('filterChange', { clientID: targetID });
+        return true;
+    }
+
+    /**
+     * Clear object filter and restore all objects on the workspace
+     * @returns {Promise<boolean>}
+     */
+    async clearFilter() {
+        console.log('[CVAT-QAQC] Clearing object filter, restoring all objects...');
+        this.activeFilterID = null;
+
+        // 1. Clear native modal filter
+        try {
+            await this.clearNativeFilterModal();
+        } catch (e) {
+            console.warn('[CVAT-QAQC] Native clear filter error:', e);
+        }
+
+        // 2. Restore all in-memory states and Redux store
+        if (this.jobInstance) {
+            try {
+                const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                for (const s of allStates) {
+                    if (typeof s.hidden !== 'undefined') {
+                        s.hidden = false;
+                    }
+                }
+
+                if (this.store) {
+                    const history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: {
+                            states: allStates,
+                            history
+                        }
+                    });
+                }
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error restoring all object annotations:', err);
+            }
+        }
+
+        this.emit('filterChange', { clientID: null });
+        return true;
     }
 
     /**
@@ -2887,6 +3289,21 @@ class FrameCard {
     }
 
     /**
+     * Fast toggle of active frame border and badge without expensive canvas re-render
+     * @param {boolean} isCurrentFrame
+     */
+    setActive(isCurrentFrame) {
+        this.isCurrent = !!isCurrentFrame;
+        if (isCurrentFrame) {
+            this.dom.classList.add('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'inline-block';
+        } else {
+            this.dom.classList.remove('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'none';
+        }
+    }
+
+    /**
      * Render or refresh canvas projections in CVAT order (Top, Side, Front)
      * @param {{ positions: Float32Array, stride: number } | null} pointCloudData
      * @param {boolean} isCurrentFrame
@@ -3081,9 +3498,16 @@ class MacOSDock {
         framesBadge.textContent = '0 frames';
         this.framesBadge = framesBadge;
 
+        // Filter Badge (Shows currently isolated/filtered Object ID)
+        const filterBadge = document.createElement('span');
+        filterBadge.className = 'cvat-qaqc-filter-badge';
+        filterBadge.style.display = 'none';
+        this.filterBadge = filterBadge;
+
         leftGroup.appendChild(title);
         leftGroup.appendChild(trackBadge);
         leftGroup.appendChild(framesBadge);
+        leftGroup.appendChild(filterBadge);
 
         // Right Controls
         const rightGroup = document.createElement('div');
@@ -3393,13 +3817,44 @@ class MacOSDock {
         console.log(`[CVAT-QAQC] Pasted size (${size.sx} × ${size.sy} × ${size.sz}m) to ${updated} frames`);
     }
 
-    open() {
+    /**
+     * Update active filter badge and controls in the header
+     * @param {number|null} clientID
+     */
+    setFilteredObjectID(clientID) {
+        this.state.filteredClientID = clientID;
+        if (this.filterBadge) {
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                this.filterBadge.style.display = 'inline-flex';
+                this.filterBadge.innerHTML = `🔍 Lọc ID: <b>#${clientID}</b> <button class="cvat-qaqc-clear-filter-btn" title="Bỏ lọc, hiện lại toàn bộ đối tượng trong CVAT">✕ Bỏ lọc</button>`;
+                const clearBtn = this.filterBadge.querySelector('.cvat-qaqc-clear-filter-btn');
+                if (clearBtn) {
+                    clearBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        if (typeof this.callbacks.onClearFilter === 'function') {
+                            this.callbacks.onClearFilter();
+                        }
+                    });
+                }
+            } else {
+                this.filterBadge.style.display = 'none';
+                this.filterBadge.innerHTML = '';
+            }
+        }
+    }
+
+    async open() {
         this.isOpen = true;
         this.dom.classList.add('open');
         this.triggerEl.style.display = 'none'; // Hide trigger when drawer is active
-        if (typeof this.callbacks.onOpen === 'function') {
+
+        // Filter CVAT workspace to target object ID before performing other operations
+        if (typeof this.callbacks.onBeforeOpen === 'function') {
+            await this.callbacks.onBeforeOpen();
+        } else if (typeof this.callbacks.onOpen === 'function') {
             this.callbacks.onOpen();
         }
+
         this.refreshAllCards();
         this.scrollToActiveFrame();
     }
@@ -3410,11 +3865,11 @@ class MacOSDock {
         this.triggerEl.style.display = 'flex'; // Restore trigger button
     }
 
-    toggleOpen() {
+    async toggleOpen() {
         if (this.isOpen) {
             this.close();
         } else {
-            this.open();
+            await this.open();
         }
     }
 
@@ -3575,16 +4030,31 @@ class MacOSDock {
      * @param {any} pcdCache
      */
     updateActiveFrame(frameNumber, pcdCache) {
+        const prevFrame = this.state.currentFrame;
         this.state.currentFrame = frameNumber;
         this.pcdCache = pcdCache;
 
-        for (const [f, card] of this.cards.entries()) {
-            const pts = pcdCache?.get(f);
-            card.renderViews(pts, f === frameNumber, {
-                viewMode: this.state.viewMode,
-                zoom: this.state.zoom,
-                pointSize: this.state.pointSize
-            });
+        // Fast toggle of active classes on previous and current cards
+        if (prevFrame !== null && prevFrame !== frameNumber) {
+            const prevCard = this.cards.get(prevFrame);
+            if (prevCard && typeof prevCard.setActive === 'function') {
+                prevCard.setActive(false);
+            }
+        }
+
+        const currentCard = this.cards.get(frameNumber);
+        if (currentCard) {
+            if (typeof currentCard.setActive === 'function') {
+                currentCard.setActive(true);
+            }
+            const pts = pcdCache?.get(frameNumber);
+            if (pts) {
+                currentCard.renderViews(pts, true, {
+                    viewMode: this.state.viewMode,
+                    zoom: this.state.zoom,
+                    pointSize: this.state.pointSize
+                });
+            }
         }
 
         if (this.isOpen) {
@@ -3652,8 +4122,43 @@ class MacOSDock {
     const pcdCache = new PCDCache();
     const hook = new CVATHook();
 
+    let currentTrackFrames = [];
+    let currentClientID = null;
+
     const dock = new MacOSDock({
+        onBeforeOpen: async () => {
+            // Khi nhấn bật UI extension, thực hiện filter object ID đúng ID đó TRƯỚC KHI xử lý các tác vụ khác
+            const clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                console.log(`[CVAT-QAQC] UI Extension opened. Filtering workspace to Object ID #${clientID} FIRST...`);
+                await hook.filterByObjectID(clientID);
+                dock.setFilteredObjectID(clientID);
+
+                // Nạp frames cho track này nếu chưa nạp
+                if (hook.jobInstance && (currentClientID !== clientID || currentTrackFrames.length === 0)) {
+                    try {
+                        currentClientID = clientID;
+                        currentTrackFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
+                        dock.updateTrack(clientID, currentTrackFrames, hook.currentFrame, pcdCache);
+                        const frameNumbers = currentTrackFrames.map(f => f.frame);
+                        pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                            dock.updateCardPointCloud(loadedFrame, pts);
+                        });
+                    } catch (err) {
+                        console.warn('[CVAT-QAQC] Error loading track frames in onBeforeOpen:', err);
+                    }
+                }
+            }
+        },
         onOpen: () => hook.refreshActiveObject(),
+        onFilterObject: async (id) => {
+            await hook.filterByObjectID(id);
+            dock.setFilteredObjectID(id);
+        },
+        onClearFilter: async () => {
+            await hook.clearFilter();
+            dock.setFilteredObjectID(null);
+        },
         onJumpToFrame: (f) => hook.jumpToFrame(f),
         onUndo: () => hook.undo(),
         onRedo: () => hook.redo(),
@@ -3664,9 +4169,6 @@ class MacOSDock {
             await hook.updateObjectOutside(frame, clientID, outside);
         }
     });
-
-    let currentTrackFrames = [];
-    let currentClientID = null;
 
     // Listen for object selection change (track or shape)
     hook.on('objectChange', async ({ clientID, job, canvas, frame }) => {
@@ -3679,7 +4181,15 @@ class MacOSDock {
         if (clientID === null) {
             currentTrackFrames = [];
             dock.updateTrack(null, [], frame, pcdCache);
+            dock.setFilteredObjectID(null);
             return;
+        }
+
+        // Nếu Dock đang mở và người dùng click vào track mới, tự động lọc ngay sang track ID mới này
+        if (dock.isOpen) {
+            console.log(`[CVAT-QAQC] Dock is active. Auto-filtering workspace to newly clicked Track #${clientID}...`);
+            await hook.filterByObjectID(clientID);
+            dock.setFilteredObjectID(clientID);
         }
 
         console.log(`[CVAT-QAQC] Selected Object / Track #${clientID}. Extracting all frames in-memory...`);
