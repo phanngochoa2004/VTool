@@ -178,6 +178,103 @@ class Math3D {
     }
 
     /**
+     * Rotate a cuboid around its LOCAL camera view axis (Top: Local Z, Side: Local Y, Front: Local X)
+     * Matches Three.js Object3D.rotateX / rotateY / rotateZ
+     * @param {Object} box - { x, y, z, rx, ry, rz, sx, sy, sz }
+     * @param {'top'|'side'|'front'} viewType
+     * @param {number} deltaRad
+     * @returns {{ rx: number, ry: number, rz: number }}
+     */
+    static rotateLocal(box, viewType, deltaRad) {
+        const rx = typeof box.rx === 'number' ? box.rx : 0;
+        const ry = typeof box.ry === 'number' ? box.ry : 0;
+        const rz = typeof box.rz === 'number' ? box.rz : 0;
+
+        // Current orientation matrix R = Rx * Ry * Rz
+        const R0 = this.eulerToRotationMatrix(rx, ry, rz);
+
+        // Local incremental rotation matrix dR
+        let dR;
+        const c = Math.cos(deltaRad);
+        const s = Math.sin(deltaRad);
+
+        if (viewType === 'top') {
+            // Local Z (Yaw)
+            dR = new Float32Array([
+                c, -s, 0,
+                s,  c, 0,
+                0,  0, 1
+            ]);
+        } else if (viewType === 'front') {
+            // Local X (Roll around Front line of sight)
+            dR = new Float32Array([
+                1, 0,  0,
+                0, c, -s,
+                0, s,  c
+            ]);
+        } else if (viewType === 'side') {
+            // Local Y (Pitch around Side line of sight)
+            dR = new Float32Array([
+                 c, 0, s,
+                 0, 1, 0,
+                -s, 0, c
+            ]);
+        } else {
+            return { rx, ry, rz };
+        }
+
+        // R_new = R0 * dR
+        const Rnew = new Float32Array(9);
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+                Rnew[i * 3 + j] = R0[i * 3 + 0] * dR[0 * 3 + j] +
+                                  R0[i * 3 + 1] * dR[1 * 3 + j] +
+                                  R0[i * 3 + 2] * dR[2 * 3 + j];
+            }
+        }
+
+        // Extract Euler angles (XYZ order) from Rnew
+        const syVal = Math.max(-1, Math.min(1, Rnew[2]));
+        const nextRy = Math.asin(syVal);
+        let nextRx, nextRz;
+
+        if (Math.abs(Rnew[2]) < 0.99999) {
+            nextRx = Math.atan2(-Rnew[5], Rnew[8]);
+            nextRz = Math.atan2(-Rnew[1], Rnew[0]);
+        } else {
+            nextRx = Math.atan2(Rnew[7], Rnew[4]);
+            nextRz = 0;
+        }
+
+        return {
+            rx: parseFloat(nextRx.toFixed(4)),
+            ry: parseFloat(nextRy.toFixed(4)),
+            rz: parseFloat(nextRz.toFixed(4))
+        };
+    }
+
+    /**
+     * Compute local orientation angles in radians (Yaw for Top, Pitch for Side, Roll for Front)
+     * Completely invariant to coordinate cross-coupling regardless of Yaw angle.
+     * @param {Object} box - { rx, ry, rz }
+     * @returns {{ yaw: number, pitch: number, roll: number }}
+     */
+    static getLocalAngles(box) {
+        if (!box) return { yaw: 0, pitch: 0, roll: 0 };
+        const rx = typeof box.rx === 'number' ? box.rx : 0;
+        const ry = typeof box.ry === 'number' ? box.ry : 0;
+        const rz = typeof box.rz === 'number' ? box.rz : 0;
+        const R = this.eulerToRotationMatrix(rx, ry, rz);
+        // Pitch (Side view: rotation around local Y)
+        const pitch = -Math.asin(Math.max(-1, Math.min(1, R[6])));
+        // Roll (Front view: rotation around local X)
+        const roll = Math.asin(Math.max(-1, Math.min(1, R[7])));
+        // Yaw (Top view: rotation around local Z)
+        const yaw = rz;
+        return { yaw, pitch, roll };
+    }
+
+    /**
      * Transform world points into cuboid local frame and crop to ROI
      * @param {Float32Array|Array<number>} points - world point cloud [x0, y0, z0, (intensity0), x1, y1, z1...]
      * @param {number} stride - 3 (x,y,z) or 4 (x,y,z,i)
@@ -2781,24 +2878,22 @@ class FrameCard {
     }
 
     /**
-     * Rotate cuboid in specific projection view
+     * Rotate cuboid around its camera's local view axis
+     * Top: Local Z (Yaw)
+     * Front: Local X (Roll)
+     * Side: Local Y (Pitch)
      * @param {'top'|'side'|'front'} viewType
      * @param {number} deltaRad - angle increment in radians
      */
     rotateView(viewType, deltaRad) {
         if (!this.data.box || this.data.outside) return;
 
-        // Top: Yaw (rz, around Z)
-        // Front: Roll (rx, around X)
-        // Side: Pitch (ry, around Y)
-        const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
-        const current = typeof this.data.box[propKey] === 'number' ? this.data.box[propKey] : 0;
-        let nextVal = current + deltaRad;
+        // Perform authentic 3D local-axis rotation matching Three.js / CVAT canvas3d
+        const newAngles = Math3D.rotateLocal(this.data.box, viewType, deltaRad);
+        this.data.box.rx = newAngles.rx;
+        this.data.box.ry = newAngles.ry;
+        this.data.box.rz = newAngles.rz;
 
-        while (nextVal > Math.PI) nextVal -= Math.PI * 2;
-        while (nextVal < -Math.PI) nextVal += Math.PI * 2;
-
-        this.data.box[propKey] = parseFloat(nextVal.toFixed(4));
         this.applyBoxChanges();
     }
 
@@ -3048,14 +3143,15 @@ class FrameCard {
         }
 
         if (this.angleDisplays) {
+            const localAngles = Math3D.getLocalAngles(box);
             if (this.angleDisplays.top) {
-                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(box.rz ?? 0);
+                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(localAngles.yaw);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
+                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(localAngles.pitch);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
+                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(localAngles.roll);
             }
         }
 

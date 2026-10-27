@@ -260,24 +260,22 @@ export class FrameCard {
     }
 
     /**
-     * Rotate cuboid in specific projection view
+     * Rotate cuboid around its camera's local view axis
+     * Top: Local Z (Yaw)
+     * Front: Local X (Roll)
+     * Side: Local Y (Pitch)
      * @param {'top'|'side'|'front'} viewType
      * @param {number} deltaRad - angle increment in radians
      */
     rotateView(viewType, deltaRad) {
         if (!this.data.box || this.data.outside) return;
 
-        // Top: Yaw (rz, around Z)
-        // Front: Roll (rx, around X)
-        // Side: Pitch (ry, around Y)
-        const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
-        const current = typeof this.data.box[propKey] === 'number' ? this.data.box[propKey] : 0;
-        let nextVal = current + deltaRad;
+        // Perform authentic 3D local-axis rotation matching Three.js / CVAT canvas3d
+        const newAngles = Math3D.rotateLocal(this.data.box, viewType, deltaRad);
+        this.data.box.rx = newAngles.rx;
+        this.data.box.ry = newAngles.ry;
+        this.data.box.rz = newAngles.rz;
 
-        while (nextVal > Math.PI) nextVal -= Math.PI * 2;
-        while (nextVal < -Math.PI) nextVal += Math.PI * 2;
-
-        this.data.box[propKey] = parseFloat(nextVal.toFixed(4));
         this.applyBoxChanges();
     }
 
@@ -527,14 +525,15 @@ export class FrameCard {
         }
 
         if (this.angleDisplays) {
+            const localAngles = Math3D.getLocalAngles(box);
             if (this.angleDisplays.top) {
-                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(box.rz ?? 0);
+                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(localAngles.yaw);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
+                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(localAngles.pitch);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
+                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(localAngles.roll);
             }
         }
 

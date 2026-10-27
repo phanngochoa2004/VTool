@@ -254,37 +254,40 @@ console.assert(Math.abs(pitch - 0) < 1e-4, 'Side/Front -1 deg test');
 console.log('✓ Discrete rotation increments (Top: 5°, 90°; Side/Front: 1°, 90°) passed');
 
 // 11. Test 3-axis rotation across Top (Yaw / rz), Front (Roll / rx), and Side (Pitch / ry)
-const rotateViewAxis = (box, viewType, deltaRad) => {
-    const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
-    const current = typeof box[propKey] === 'number' ? box[propKey] : 0;
-    let nextVal = current + deltaRad;
-    while (nextVal > Math.PI) nextVal -= Math.PI * 2;
-    while (nextVal < -Math.PI) nextVal += Math.PI * 2;
-    box[propKey] = parseFloat(nextVal.toFixed(4));
-    return box;
+// Verifies authentic 3D local-axis rotation and independence from yaw cross-coupling
+const testLocalRotation = (initialYawDeg) => {
+    const initialYaw = initialYawDeg * Math.PI / 180;
+    const baseBox = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: initialYaw, sx: 2, sy: 4, sz: 1.5 };
+
+    // Front rotation (+5 deg): must affect roll only
+    const rotFront = Math3D.rotateLocal(baseBox, 'front', 5 * Math.PI / 180);
+    const anglesFront = Math3D.getLocalAngles(rotFront);
+    const rollFrontDeg = anglesFront.roll * 180 / Math.PI;
+    const pitchFrontDeg = anglesFront.pitch * 180 / Math.PI;
+    console.assert(Math.abs(rollFrontDeg - 5.0) < 0.1, `Front roll test at yaw ${initialYawDeg} deg failed, got ${rollFrontDeg}`);
+    console.assert(Math.abs(pitchFrontDeg) < 0.1, `Front pitch leak test at yaw ${initialYawDeg} deg failed, got ${pitchFrontDeg}`);
+
+    // Side rotation (+5 deg): must affect pitch only
+    const rotSide = Math3D.rotateLocal(baseBox, 'side', 5 * Math.PI / 180);
+    const anglesSide = Math3D.getLocalAngles(rotSide);
+    const pitchSideDeg = anglesSide.pitch * 180 / Math.PI;
+    const rollSideDeg = anglesSide.roll * 180 / Math.PI;
+    console.assert(Math.abs(pitchSideDeg - 5.0) < 0.1, `Side pitch test at yaw ${initialYawDeg} deg failed, got ${pitchSideDeg}`);
+    console.assert(Math.abs(rollSideDeg) < 0.1, `Side roll leak test at yaw ${initialYawDeg} deg failed, got ${rollSideDeg}`);
+
+    // Top rotation (+5 deg): must affect yaw only
+    const rotTop = Math3D.rotateLocal(baseBox, 'top', 5 * Math.PI / 180);
+    const anglesTop = Math3D.getLocalAngles(rotTop);
+    const expectedYawDeg = initialYawDeg + 5;
+    const diffYaw = Math.abs(anglesTop.yaw * 180 / Math.PI - expectedYawDeg);
+    console.assert(diffYaw < 0.1 || Math.abs(diffYaw - 360) < 0.1, `Top yaw test at yaw ${initialYawDeg} deg failed`);
+    console.assert(Math.abs(anglesTop.pitch * 180 / Math.PI) < 0.1 && Math.abs(anglesTop.roll * 180 / Math.PI) < 0.1, `Top tilt leak test failed`);
 };
 
-const multiAxisBox = { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 2, sy: 4, sz: 1.5 };
-
-// Top rotation affects rz (Yaw) only
-rotateViewAxis(multiAxisBox, 'top', 5 * Math.PI / 180);
-console.assert(Math.abs(multiAxisBox.rz - (5 * Math.PI / 180)) < 1e-4, 'Top rotation sets rz');
-console.assert(multiAxisBox.rx === 0 && multiAxisBox.ry === 0, 'Top rotation leaves rx and ry unchanged');
-
-// Front rotation affects rx (Roll) only
-rotateViewAxis(multiAxisBox, 'front', 1 * Math.PI / 180);
-console.assert(Math.abs(multiAxisBox.rx - (1 * Math.PI / 180)) < 1e-4, 'Front rotation sets rx');
-console.assert(multiAxisBox.ry === 0, 'Front rotation leaves ry unchanged');
-
-// Side rotation affects ry (Pitch) only
-rotateViewAxis(multiAxisBox, 'side', 90 * Math.PI / 180);
-console.assert(Math.abs(multiAxisBox.ry - (Math.PI / 2)) < 1e-4, 'Side rotation sets ry');
-
-// 180 flip on Front
-rotateViewAxis(multiAxisBox, 'front', Math.PI);
-console.assert(Math.abs(Math.abs(multiAxisBox.rx) - (Math.PI - 1 * Math.PI / 180)) < 1e-4, 'Front 180 flip normalized');
-
-console.log('✓ 3-Axis rotation (Top/Yaw, Front/Roll, Side/Pitch) passed');
+for (const yaw of [0, 30, 45, 90, 135, 180, -90]) {
+    testLocalRotation(yaw);
+}
+console.log('✓ 3-Axis local-axis rotation (Top/Yaw, Front/Roll, Side/Pitch) with zero cross-coupling passed across 7 yaw angles');
 
 // 12. Test Outside frame retention and CVATHook.updateObjectOutside
 const mockTrackStates = {
