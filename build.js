@@ -5,6 +5,7 @@ const srcDir = path.resolve(__dirname, 'src');
 const contentDir = path.resolve(__dirname, 'content');
 
 const files = [
+    path.join(srcDir, 'config', 'allowed_sites.js'),
     path.join(srcDir, 'engine', 'math_3d.js'),
     path.join(srcDir, 'engine', 'ortho_canvas.js'),
     path.join(srcDir, 'core', 'pcd_cache.js'),

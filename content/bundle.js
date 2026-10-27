@@ -14,6 +14,141 @@
     console.log('[CVAT-QAQC] Initializing 3D Multi-Frame QA/QC Inspector (Main World Bundle)...');
 
     // ------------------------------------------
+    // File: src\config\allowed_sites.js
+    // ------------------------------------------
+
+/**
+ * Danh sách các trang web / địa chỉ CVAT được phép inject extension.
+ * Thay cho việc dùng regex hoặc đoán DOM, extension sẽ chỉ chạy trên các trang thuộc danh sách này.
+ *
+ * CÁCH CẤU HÌNH:
+ * 1. Địa chỉ chính xác (Khuyên dùng):
+ *    'https://cvat-test.vantixapps.net'
+ *    'http://localhost:8080'
+ *
+ * 2. Wildcard tiền tố (Khớp mọi trang bắt đầu bằng https://cvat...):
+ *    'https://cvat*' (khớp https://cvat-test.vantixapps.net, https://cvat-prod.vantixapps.net, v.v.)
+ *
+ * 3. Wildcard domain (Khớp mọi subdomain của vantixapps.net):
+ *    '*.vantixapps.net'
+ */
+const ALLOWED_SITES = [
+    // Local CVAT Server instances (mặc định của CVAT là port 8080)
+    'http://localhost:8080',
+    'http://127.0.0.1:8080',
+
+    // Local CVAT Web UI dev server (port 3000)
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+
+    // Local port 80 (nếu chạy CVAT qua reverse proxy port chuẩn)
+    'http://localhost',
+    'http://127.0.0.1',
+
+    // Official CVAT Cloud instances
+    'https://app.cvat.ai',
+    'https://cvat.ai',
+
+    // Custom CVAT Server instances (ví dụ server của bạn)
+    'https://cvat-test.vantixapps.net',
+
+    // Hỗ trợ dạng tiền tố: khớp mọi site bắt đầu bằng https://cvat...
+    'https://cvat*',
+
+    // Hỗ trợ mọi subdomain của vantixapps.net
+    '*.vantixapps.net'
+];
+
+/**
+ * Kiểm tra xem URL hoặc location hiện tại có thuộc danh sách ALLOWED_SITES hay không.
+ * Hoàn toàn dùng so sánh chuỗi (origin, prefix, domain suffix) - không dùng regex.
+ * @param {Location|string} [target] - window.location hoặc chuỗi URL cần kiểm tra
+ * @returns {boolean}
+ */
+function isAllowedSite(target) {
+    let currentOrigin = '';
+    let currentHref = '';
+    let currentHost = '';
+    let currentHostname = '';
+
+    if (typeof target === 'string') {
+        try {
+            const parsed = new URL(target, 'http://localhost');
+            currentOrigin = parsed.origin;
+            currentHref = parsed.href;
+            currentHost = parsed.host;
+            currentHostname = parsed.hostname;
+        } catch (_) {
+            currentOrigin = target;
+            currentHref = target;
+        }
+    } else if (target && typeof target === 'object') {
+        currentOrigin = target.origin || '';
+        currentHref = target.href || '';
+        currentHost = target.host || '';
+        currentHostname = target.hostname || '';
+    } else if (typeof window !== 'undefined' && window.location) {
+        currentOrigin = window.location.origin || '';
+        currentHref = window.location.href || '';
+        currentHost = window.location.host || '';
+        currentHostname = window.location.hostname || '';
+    }
+
+    if (!currentOrigin && !currentHref) return false;
+
+    const lowerOrigin = currentOrigin.toLowerCase();
+    const lowerHref = currentHref.toLowerCase();
+    const lowerHostname = currentHostname.toLowerCase();
+
+    for (const rawSite of ALLOWED_SITES) {
+        if (!rawSite || typeof rawSite !== 'string') continue;
+        const site = rawSite.trim().toLowerCase().replace(/\/+$/, '');
+        if (!site) continue;
+
+        // 1. Wildcard dạng prefix (ví dụ: 'https://cvat*' hoặc 'http://cvat*')
+        if (site.endsWith('*')) {
+            const prefix = site.slice(0, -1);
+            if (lowerOrigin.startsWith(prefix) || lowerHref.startsWith(prefix)) {
+                return true;
+            }
+        }
+
+        // 2. Wildcard dạng domain (ví dụ: '*.vantixapps.net')
+        if (site.startsWith('*.')) {
+            const domainSuffix = site.slice(1); // '.vantixapps.net'
+            if (lowerHostname.endsWith(domainSuffix) || lowerHostname === site.slice(2)) {
+                return true;
+            }
+        }
+
+        // 3. Tiền tố linh hoạt nếu người dùng chỉ nhập 'https://cvat'
+        if (site.startsWith('https://cvat') || site.startsWith('http://cvat')) {
+            if (lowerOrigin.startsWith(site)) {
+                return true;
+            }
+        }
+
+        // 4. So khớp chính xác Origin (ví dụ: 'https://cvat-test.vantixapps.net', 'http://localhost:8080')
+        if (lowerOrigin === site) {
+            return true;
+        }
+
+        // 5. So khớp tiền tố URL đầy đủ
+        if (lowerHref.startsWith(site + '/') || lowerHref === site) {
+            return true;
+        }
+
+        // 6. So khớp hostname thuần
+        if (lowerHostname === site || currentHost.toLowerCase() === site) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+    // ------------------------------------------
     // File: src\engine\math_3d.js
     // ------------------------------------------
 
@@ -1101,20 +1236,10 @@ class CVATHook {
      */
     async init() {
         return new Promise((resolve) => {
-            // First check if this page is likely a CVAT application
-            if (typeof document !== 'undefined') {
-                const isLikelyCVAT = typeof window.cvat !== 'undefined' ||
-                    document.title?.includes('CVAT') ||
-                    document.title?.includes('Computer Vision Annotation Tool') ||
-                    !!document.getElementById('layout-grid') ||
-                    !!document.querySelector('.cvat-app, [class*="cvat-"]') ||
-                    /\/(tasks|jobs|projects|cloudstorages)(\/|$)/.test(window.location?.pathname || '');
-
-                if (!isLikelyCVAT) {
-                    // Quick abort for non-CVAT websites sharing localhost or 127.0.0.1
-                    resolve(false);
-                    return;
-                }
+            // First check if this page is in the allowed sites list (zero regex)
+            if (typeof window !== 'undefined' && !isAllowedSite()) {
+                resolve(false);
+                return;
             }
 
             const checkInterval = setInterval(() => {
@@ -3519,67 +3644,14 @@ class MacOSDock {
 
 
 
-/**
- * Detect if the current page is genuine CVAT before attaching UI or polling
- */
-function isCVATPage() {
-    if (typeof window !== 'undefined' && typeof window.cvat !== 'undefined') return true;
-
-    if (typeof document === 'undefined') return false;
-
-    const title = document.title || '';
-    if (title.includes('Computer Vision Annotation Tool') || title.includes('CVAT')) {
-        return true;
-    }
-
-    const meta = document.querySelector('meta[name="description"]');
-    if (meta && meta.content && meta.content.includes('Computer Vision Annotation Tool')) {
-        return true;
-    }
-
-    if (document.getElementById('layout-grid') && document.getElementById('root')) {
-        return true;
-    }
-
-    if (document.querySelector('.cvat-app, [class*="cvat-"]')) {
-        return true;
-    }
-
-    const path = (typeof window !== 'undefined' && window.location.pathname) || '';
-    if (/\/(tasks|jobs|projects|cloudstorages|organization)(\/|$)/.test(path)) {
-        return true;
-    }
-
-    return false;
-}
-
-function ensureCVATPage(timeoutMs = 1500) {
-    if (isCVATPage()) return Promise.resolve(true);
-
-    return new Promise((resolve) => {
-        const startTime = Date.now();
-        const interval = setInterval(() => {
-            if (isCVATPage()) {
-                clearInterval(interval);
-                resolve(true);
-            } else if (Date.now() - startTime >= timeoutMs) {
-                clearInterval(interval);
-                resolve(false);
-            }
-        }, 150);
-    });
-}
 
 (async function initQAQCInspector() {
-    // Check if this tab is genuinely a CVAT page before creating any UI or hooks
-    const isCVAT = await ensureCVATPage(1500);
-    if (!isCVAT) {
-        // Not a CVAT web app (e.g. other local web servers on port 5173, 3000, 8000).
-        // Exit silently without polluting DOM, setting timers, or logging warnings.
+    // Chỉ kích hoạt extension trên các trang web thuộc danh sách cho phép (ALLOWED_SITES)
+    if (!isAllowedSite()) {
         return;
     }
 
-    console.log('[CVAT-QAQC] Initializing 3D QA/QC Inspector...');
+    console.log('[CVAT-QAQC] Allowed CVAT site detected. Initializing 3D QA/QC Inspector...');
 
     const pcdCache = new PCDCache();
     const hook = new CVATHook();

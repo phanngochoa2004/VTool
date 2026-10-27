@@ -4,6 +4,8 @@
  * Completely client-side and reactive.
  */
 
+import { isAllowedSite } from '../config/allowed_sites.js';
+
 export class CVATHook {
     constructor() {
         this.store = null;
@@ -28,20 +30,10 @@ export class CVATHook {
      */
     async init() {
         return new Promise((resolve) => {
-            // First check if this page is likely a CVAT application
-            if (typeof document !== 'undefined') {
-                const isLikelyCVAT = typeof window.cvat !== 'undefined' ||
-                    document.title?.includes('CVAT') ||
-                    document.title?.includes('Computer Vision Annotation Tool') ||
-                    !!document.getElementById('layout-grid') ||
-                    !!document.querySelector('.cvat-app, [class*="cvat-"]') ||
-                    /\/(tasks|jobs|projects|cloudstorages)(\/|$)/.test(window.location?.pathname || '');
-
-                if (!isLikelyCVAT) {
-                    // Quick abort for non-CVAT websites sharing localhost or 127.0.0.1
-                    resolve(false);
-                    return;
-                }
+            // First check if this page is in the allowed sites list (zero regex)
+            if (typeof window !== 'undefined' && !isAllowedSite()) {
+                resolve(false);
+                return;
             }
 
             const checkInterval = setInterval(() => {

@@ -7,68 +7,15 @@ import { CVATHook } from '../src/core/cvat_hook.js';
 import { PCDCache } from '../src/core/pcd_cache.js';
 import { TrackReader } from '../src/core/track_reader.js';
 import { MacOSDock } from '../src/ui/macos_dock.js';
-
-/**
- * Detect if the current page is genuine CVAT before attaching UI or polling
- */
-function isCVATPage() {
-    if (typeof window !== 'undefined' && typeof window.cvat !== 'undefined') return true;
-
-    if (typeof document === 'undefined') return false;
-
-    const title = document.title || '';
-    if (title.includes('Computer Vision Annotation Tool') || title.includes('CVAT')) {
-        return true;
-    }
-
-    const meta = document.querySelector('meta[name="description"]');
-    if (meta && meta.content && meta.content.includes('Computer Vision Annotation Tool')) {
-        return true;
-    }
-
-    if (document.getElementById('layout-grid') && document.getElementById('root')) {
-        return true;
-    }
-
-    if (document.querySelector('.cvat-app, [class*="cvat-"]')) {
-        return true;
-    }
-
-    const path = (typeof window !== 'undefined' && window.location.pathname) || '';
-    if (/\/(tasks|jobs|projects|cloudstorages|organization)(\/|$)/.test(path)) {
-        return true;
-    }
-
-    return false;
-}
-
-function ensureCVATPage(timeoutMs = 1500) {
-    if (isCVATPage()) return Promise.resolve(true);
-
-    return new Promise((resolve) => {
-        const startTime = Date.now();
-        const interval = setInterval(() => {
-            if (isCVATPage()) {
-                clearInterval(interval);
-                resolve(true);
-            } else if (Date.now() - startTime >= timeoutMs) {
-                clearInterval(interval);
-                resolve(false);
-            }
-        }, 150);
-    });
-}
+import { isAllowedSite } from '../src/config/allowed_sites.js';
 
 (async function initQAQCInspector() {
-    // Check if this tab is genuinely a CVAT page before creating any UI or hooks
-    const isCVAT = await ensureCVATPage(1500);
-    if (!isCVAT) {
-        // Not a CVAT web app (e.g. other local web servers on port 5173, 3000, 8000).
-        // Exit silently without polluting DOM, setting timers, or logging warnings.
+    // Chỉ kích hoạt extension trên các trang web thuộc danh sách cho phép (ALLOWED_SITES)
+    if (!isAllowedSite()) {
         return;
     }
 
-    console.log('[CVAT-QAQC] Initializing 3D QA/QC Inspector...');
+    console.log('[CVAT-QAQC] Allowed CVAT site detected. Initializing 3D QA/QC Inspector...');
 
     const pcdCache = new PCDCache();
     const hook = new CVATHook();
