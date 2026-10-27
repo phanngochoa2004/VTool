@@ -1559,7 +1559,7 @@ class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const filter = this.activeFilterID !== null ? [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] : [];
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
                     const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
                     const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
@@ -1636,7 +1636,7 @@ class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const filter = this.activeFilterID !== null ? [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] : [];
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
                     const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
                     const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
@@ -1699,11 +1699,28 @@ class CVATHook {
                 if (silencer) silencer.remove();
             } catch (_) {}
         }
+
+        // Sanitize broken/corrupt entries from localStorage history (e.g. broken "Not" -> "Select field")
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const historyStr = window.localStorage.getItem('annotationFiltersHistory')?.trim() || '[]';
+                let historyList = JSON.parse(historyStr);
+                if (Array.isArray(historyList)) {
+                    const cleaned = historyList.filter(entry => {
+                        if (!entry || !entry.logic || typeof entry.logic !== 'object') return false;
+                        const s = JSON.stringify(entry.logic);
+                        if (s === '{}' || s.includes('null') || s.includes('Select field')) return false;
+                        return true;
+                    });
+                    window.localStorage.setItem('annotationFiltersHistory', JSON.stringify(cleaned));
+                }
+            }
+        } catch (_) {}
     }
 
     /**
      * Filter CVAT workspace to only show the target object clientID.
-     * Uses CVAT's native JsonLogic query format: { "==": [{ "var": "objectID" }, targetID] }
+     * Uses CVAT's native JsonLogic query format: { "and": [{ "==": [{ "var": "objectID" }, targetID] }] }
      * Dispatches CHANGE_ANNOTATIONS_FILTERS & FETCH_ANNOTATIONS_SUCCESS directly to Redux.
      * This isolates the track in CVAT:
      * - The Objects sidebar drops to "Items: 1"
@@ -1720,15 +1737,22 @@ class CVATHook {
         }
 
         const targetID = Number(clientID);
+        if (isNaN(targetID)) return false;
+
         console.log(`[CVAT-QAQC] Filtering workspace to Object ID #${targetID} (isolating track)...`);
         this.activeFilterID = targetID;
 
         // 1. Ensure CVAT filter modal is closed
         this.closeFilterModalIfOpen();
 
-        // 2. Build CVAT native JsonLogic filter for objectID
-        const filterLogic = { '==': [{ 'var': 'objectID' }, targetID] };
-        const filters = [filterLogic];
+        // 2. Build CVAT native JsonLogic filter for objectID wrapped in root 'and' group
+        // react-awesome-query-builder and CVAT annotationsFilter require the root 'and' group structure
+        const filterLogic = {
+            and: [
+                { '==': [{ var: 'objectID' }, targetID] }
+            ]
+        };
+        const filters = [filterLogic, {}];
 
         // 3. Dispatch CHANGE_ANNOTATIONS_FILTERS to CVAT Redux store
         if (this.store) {
@@ -1777,7 +1801,9 @@ class CVATHook {
             }
         }
 
-        // 5. Dispatch FETCH_ANNOTATIONS_SUCCESS & UPDATE_ANNOTATIONS_SUCCESS to update Redux & Objects sidebar
+        // 5. Dispatch FETCH_ANNOTATIONS_SUCCESS to update Redux & Objects sidebar (Items: 1)
+        // Note: Do NOT dispatch UPDATE_ANNOTATIONS_SUCCESS here because it merges into prevStates,
+        // which would retain all 80 other objects. FETCH_ANNOTATIONS_SUCCESS replaces states completely!
         if (this.store) {
             try {
                 this.store.dispatch({
@@ -1785,13 +1811,6 @@ class CVATHook {
                     payload: {
                         states: filteredStates,
                         intervals: [],
-                        history
-                    }
-                });
-                this.store.dispatch({
-                    type: 'UPDATE_ANNOTATIONS_SUCCESS',
-                    payload: {
-                        states: filteredStates,
                         history
                     }
                 });
@@ -1821,7 +1840,7 @@ class CVATHook {
                     logic: filterLogic,
                     keypointLogic: {}
                 };
-                historyList = [newEntry, ...historyList.filter(f => JSON.stringify(f.logic) !== JSON.stringify(filterLogic))].slice(0, 10);
+                historyList = [newEntry, ...historyList.filter(f => JSON.stringify(f?.logic) !== JSON.stringify(filterLogic))].slice(0, 10);
                 window.localStorage.setItem('annotationFiltersHistory', JSON.stringify(historyList));
             }
         } catch (_) {}
@@ -1872,7 +1891,7 @@ class CVATHook {
             }
         }
 
-        // 4. Dispatch FETCH_ANNOTATIONS_SUCCESS & UPDATE_ANNOTATIONS_SUCCESS
+        // 4. Dispatch FETCH_ANNOTATIONS_SUCCESS to restore Redux states & objects sidebar
         if (this.store) {
             try {
                 this.store.dispatch({
@@ -1880,13 +1899,6 @@ class CVATHook {
                     payload: {
                         states: allStates,
                         intervals: [],
-                        history
-                    }
-                });
-                this.store.dispatch({
-                    type: 'UPDATE_ANNOTATIONS_SUCCESS',
-                    payload: {
-                        states: allStates,
                         history
                     }
                 });
@@ -3970,6 +3982,12 @@ class MacOSDock {
         return;
     }
 
+    if (window.__CVAT_QAQC_INJECTED__) {
+        console.log('[CVAT-QAQC] Already initialized, skipping duplicate injection.');
+        return;
+    }
+    window.__CVAT_QAQC_INJECTED__ = true;
+
     console.log('[CVAT-QAQC] Allowed CVAT site detected. Initializing 3D QA/QC Inspector...');
 
     const pcdCache = new PCDCache();
@@ -3981,7 +3999,21 @@ class MacOSDock {
     const dock = new MacOSDock({
         onBeforeOpen: async () => {
             // Khi nhấn bật UI extension, thực hiện filter object ID đúng ID đó TRƯỚC KHI xử lý các tác vụ khác
-            const clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+            let clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+
+            // Fallback auto-detection: Nếu chưa chọn track nào, tự động lấy track 3D cuboid đầu tiên trên frame hiện tại
+            if ((clientID === null || typeof clientID === 'undefined') && hook.jobInstance) {
+                try {
+                    const states = await hook.jobInstance.annotations.get(hook.currentFrame, true, []);
+                    const cuboid = states.find(s => s.shapeType === 'cuboid' || (s.points && s.points.length >= 9));
+                    if (cuboid && typeof cuboid.clientID === 'number') {
+                        clientID = cuboid.clientID;
+                        hook.activeClientID = clientID;
+                        currentClientID = clientID;
+                    }
+                } catch (_) {}
+            }
+
             if (clientID !== null && typeof clientID !== 'undefined') {
                 console.log(`[CVAT-QAQC] UI Extension opened. Filtering workspace to Object ID #${clientID} FIRST...`);
                 await hook.filterByObjectID(clientID);

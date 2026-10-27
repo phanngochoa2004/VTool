@@ -391,7 +391,7 @@ hook.jobInstance = {
 const filterSuccess = await hook.filterByObjectID(102);
 console.assert(filterSuccess === true, 'filterByObjectID returned true');
 console.assert(hook.activeFilterID === 102, 'activeFilterID set to 102');
-console.assert(lastDispatchedAction.type === 'UPDATE_ANNOTATIONS_SUCCESS', 'Dispatched UPDATE_ANNOTATIONS_SUCCESS');
+console.assert(lastDispatchedAction.type === 'FETCH_ANNOTATIONS_SUCCESS', 'Dispatched FETCH_ANNOTATIONS_SUCCESS');
 console.assert(lastDispatchedAction.payload.states.length === 1, 'Only 1 object returned in state');
 console.assert(lastDispatchedAction.payload.states[0].clientID === 102, 'Filtered state has clientID 102');
 console.assert(mockMultiObjectStates.find(s => s.clientID === 101).hidden === true, 'Object 101 marked as hidden');
@@ -403,7 +403,7 @@ console.log('✓ CVATHook.filterByObjectID track isolation passed (other objects
 const clearSuccess = await hook.clearFilter();
 console.assert(clearSuccess === true, 'clearFilter returned true');
 console.assert(hook.activeFilterID === null, 'activeFilterID reset to null');
-console.assert(lastDispatchedAction.type === 'UPDATE_ANNOTATIONS_SUCCESS', 'Dispatched UPDATE_ANNOTATIONS_SUCCESS on clear');
+console.assert(lastDispatchedAction.type === 'FETCH_ANNOTATIONS_SUCCESS', 'Dispatched FETCH_ANNOTATIONS_SUCCESS on clear');
 console.assert(lastDispatchedAction.payload.states.length === 3, 'All 3 objects restored');
 console.assert(mockMultiObjectStates.every(s => s.hidden === false), 'All objects unhidden');
 console.log('✓ CVATHook.clearFilter restored all objects');

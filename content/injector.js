@@ -15,6 +15,12 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
         return;
     }
 
+    if (window.__CVAT_QAQC_INJECTED__) {
+        console.log('[CVAT-QAQC] Already initialized, skipping duplicate injection.');
+        return;
+    }
+    window.__CVAT_QAQC_INJECTED__ = true;
+
     console.log('[CVAT-QAQC] Allowed CVAT site detected. Initializing 3D QA/QC Inspector...');
 
     const pcdCache = new PCDCache();
@@ -26,7 +32,21 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
     const dock = new MacOSDock({
         onBeforeOpen: async () => {
             // Khi nhấn bật UI extension, thực hiện filter object ID đúng ID đó TRƯỚC KHI xử lý các tác vụ khác
-            const clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+            let clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+
+            // Fallback auto-detection: Nếu chưa chọn track nào, tự động lấy track 3D cuboid đầu tiên trên frame hiện tại
+            if ((clientID === null || typeof clientID === 'undefined') && hook.jobInstance) {
+                try {
+                    const states = await hook.jobInstance.annotations.get(hook.currentFrame, true, []);
+                    const cuboid = states.find(s => s.shapeType === 'cuboid' || (s.points && s.points.length >= 9));
+                    if (cuboid && typeof cuboid.clientID === 'number') {
+                        clientID = cuboid.clientID;
+                        hook.activeClientID = clientID;
+                        currentClientID = clientID;
+                    }
+                } catch (_) {}
+            }
+
             if (clientID !== null && typeof clientID !== 'undefined') {
                 console.log(`[CVAT-QAQC] UI Extension opened. Filtering workspace to Object ID #${clientID} FIRST...`);
                 await hook.filterByObjectID(clientID);
