@@ -12,13 +12,15 @@ export class CVATHook {
         this.jobInstance = null;
         this.canvasInstance = null;
         this.activeClientID = null;
+        this.activeFilterID = null;
         this.currentFrame = 0;
         this.listeners = {
             objectChange: [],
             frameChange: [],
             canvasReady: [],
             objectUpdated: [],
-            historyChange: []
+            historyChange: [],
+            filterChange: []
         };
         this.isHooked = false;
         this._undoRedoLock = false;
@@ -126,6 +128,25 @@ export class CVATHook {
         const canvas = state.annotation.canvas?.instance;
         if (canvas && typeof canvas.activatedElementID === 'number') {
             return canvas.activatedElementID;
+        }
+
+        // 3.5 Check active or selected item in DOM objects sidebar
+        if (typeof document !== 'undefined') {
+            try {
+                const activeItem = document.querySelector(
+                    '[class*="objects-sidebar-state-item"][class*="active"], ' +
+                    '.cvat-objects-sidebar-state-item-active, ' +
+                    '[id^="cvat-objects-sidebar-state-item-"].active, ' +
+                    '[id^="cvat-objects-sidebar-state-item-"]:focus-within'
+                );
+                if (activeItem) {
+                    const idMatch = (activeItem.id || '').match(/cvat-objects-sidebar-state-item-(\d+)/);
+                    if (idMatch) return parseInt(idMatch[1], 10);
+                    const numText = activeItem.querySelector('[class*="number"]')?.textContent?.trim() ||
+                                   activeItem.querySelector('span')?.textContent?.match(/#(\d+)/)?.[1];
+                    if (numText && !isNaN(parseInt(numText, 10))) return parseInt(numText, 10);
+                }
+            } catch (_) {}
         }
 
         // 4. Auto-detect: if on current frame there is a 3D cuboid, auto-select it!
@@ -337,11 +358,13 @@ export class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
                         payload: {
-                            states: freshStates,
+                            states: statesToPush,
                             history
                         }
                     });
@@ -412,11 +435,13 @@ export class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
                         payload: {
-                            states: freshStates,
+                            states: statesToPush,
                             history
                         }
                     });
@@ -451,6 +476,248 @@ export class CVATHook {
             console.error('[CVAT-QAQC] Failed to update in-memory outside:', err);
             return false;
         }
+    }
+
+    /**
+     * Ensure CVAT's native FiltersModal dialog is closed/hidden so it never pops up in front of user
+     */
+    closeFilterModalIfOpen() {
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'SWITCH_SHOWING_FILTERS',
+                    payload: { visible: false }
+                });
+            } catch (_) {}
+        }
+        if (typeof document !== 'undefined') {
+            try {
+                const cancelBtn = document.querySelector('.cvat-filters-modal-cancel-button');
+                if (cancelBtn) cancelBtn.click();
+                const silencer = document.getElementById('cvat-qaqc-filter-silencer');
+                if (silencer) silencer.remove();
+            } catch (_) {}
+        }
+
+        // Sanitize broken/corrupt entries from localStorage history (e.g. broken "Not" -> "Select field")
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const historyStr = window.localStorage.getItem('annotationFiltersHistory')?.trim() || '[]';
+                let historyList = JSON.parse(historyStr);
+                if (Array.isArray(historyList)) {
+                    const cleaned = historyList.filter(entry => {
+                        if (!entry || !entry.logic || typeof entry.logic !== 'object') return false;
+                        const s = JSON.stringify(entry.logic);
+                        if (s === '{}' || s.includes('null') || s.includes('Select field')) return false;
+                        return true;
+                    });
+                    window.localStorage.setItem('annotationFiltersHistory', JSON.stringify(cleaned));
+                }
+            }
+        } catch (_) {}
+    }
+
+    /**
+     * Filter CVAT workspace to only show the target object clientID.
+     * Uses CVAT's native JsonLogic query format: { "and": [{ "==": [{ "var": "objectID" }, targetID] }] }
+     * Dispatches CHANGE_ANNOTATIONS_FILTERS & FETCH_ANNOTATIONS_SUCCESS directly to Redux.
+     * This isolates the track in CVAT:
+     * - The Objects sidebar drops to "Items: 1"
+     * - Three.js Canvas3D removes all other tracks from the scene (zero lag)
+     * - Top-bar Filters button becomes active (filters-armed class)
+     * - Opening the native Filters modal cleanly renders "ObjectID == targetID" via react-awesome-query-builder
+     * - NO modal table pops up in front of user
+     * @param {number} clientID
+     * @returns {Promise<boolean>}
+     */
+    async filterByObjectID(clientID) {
+        if (clientID === null || typeof clientID === 'undefined') {
+            return this.clearFilter();
+        }
+
+        const targetID = Number(clientID);
+        if (isNaN(targetID)) return false;
+
+        console.log(`[CVAT-QAQC] Filtering workspace to Object ID #${targetID} (isolating track)...`);
+        this.activeFilterID = targetID;
+
+        // 1. Ensure CVAT filter modal is closed
+        this.closeFilterModalIfOpen();
+
+        // 2. Build CVAT native JsonLogic filter for objectID wrapped in root 'and' group
+        // react-awesome-query-builder and CVAT annotationsFilter require the root 'and' group structure
+        const filterLogic = {
+            and: [
+                { '==': [{ var: 'objectID' }, targetID] }
+            ]
+        };
+        const filters = [filterLogic, {}];
+
+        // 3. Dispatch CHANGE_ANNOTATIONS_FILTERS to CVAT Redux store
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'CHANGE_ANNOTATIONS_FILTERS',
+                    payload: {
+                        filters
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error dispatching CHANGE_ANNOTATIONS_FILTERS:', e);
+            }
+        }
+
+        // 4. Query filtered states from CVAT job annotations using native JsonLogic filter
+        let filteredStates = [];
+        let history = null;
+        if (this.jobInstance) {
+            try {
+                history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                try {
+                    filteredStates = await this.jobInstance.annotations.get(this.currentFrame, true, filters);
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] annotations.get with filters error, fallback to client-side filter:', e);
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                }
+
+                if (!Array.isArray(filteredStates) || filteredStates.length === 0) {
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                }
+
+                // Hide all other states in-memory so Three.js drops draw calls immediately
+                try {
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    for (const s of allStates) {
+                        if (typeof s.hidden !== 'undefined') {
+                            s.hidden = (s.clientID !== targetID);
+                        }
+                    }
+                } catch (_) {}
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error in job annotations filter:', err);
+            }
+        }
+
+        // 5. Dispatch FETCH_ANNOTATIONS_SUCCESS to update Redux & Objects sidebar (Items: 1)
+        // Note: Do NOT dispatch UPDATE_ANNOTATIONS_SUCCESS here because it merges into prevStates,
+        // which would retain all 80 other objects. FETCH_ANNOTATIONS_SUCCESS replaces states completely!
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'FETCH_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: filteredStates,
+                        intervals: [],
+                        history
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error dispatching FETCH_ANNOTATIONS_SUCCESS:', e);
+            }
+        }
+
+        // 6. Update Canvas3D to immediately remove other objects from Three.js scene
+        if (this.canvasInstance && typeof this.canvasInstance.setup === 'function' && this.jobInstance) {
+            try {
+                const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                this.canvasInstance.setup(frameData, filteredStates);
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Canvas3D setup error:', e);
+            }
+        }
+
+        // 7. Update localStorage filters history so CVAT native modal shows it under Recently Used
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const historyStr = window.localStorage.getItem('annotationFiltersHistory')?.trim() || '[]';
+                let historyList = JSON.parse(historyStr);
+                if (!Array.isArray(historyList)) historyList = [];
+                const newEntry = {
+                    id: `qaqc-filter-${targetID}`,
+                    logic: filterLogic,
+                    keypointLogic: {}
+                };
+                historyList = [newEntry, ...historyList.filter(f => JSON.stringify(f?.logic) !== JSON.stringify(filterLogic))].slice(0, 10);
+                window.localStorage.setItem('annotationFiltersHistory', JSON.stringify(historyList));
+            }
+        } catch (_) {}
+
+        this.emit('filterChange', { clientID: targetID });
+        return true;
+    }
+
+    /**
+     * Clear object filter and restore all objects on the workspace
+     * @returns {Promise<boolean>}
+     */
+    async clearFilter() {
+        console.log('[CVAT-QAQC] Clearing object filter, restoring all objects...');
+        this.activeFilterID = null;
+
+        // 1. Ensure modal is closed
+        this.closeFilterModalIfOpen();
+
+        // 2. Dispatch CHANGE_ANNOTATIONS_FILTERS with empty array
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'CHANGE_ANNOTATIONS_FILTERS',
+                    payload: {
+                        filters: []
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error clearing CHANGE_ANNOTATIONS_FILTERS:', e);
+            }
+        }
+
+        // 3. Fetch all states and restore
+        let allStates = [];
+        let history = null;
+        if (this.jobInstance) {
+            try {
+                allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                for (const s of allStates) {
+                    if (typeof s.hidden !== 'undefined') {
+                        s.hidden = false;
+                    }
+                }
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error restoring all object annotations:', err);
+            }
+        }
+
+        // 4. Dispatch FETCH_ANNOTATIONS_SUCCESS to restore Redux states & objects sidebar
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'FETCH_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: allStates,
+                        intervals: [],
+                        history
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error restoring Redux annotations on clear:', e);
+            }
+        }
+
+        // 5. Update Canvas3D to restore all objects in Three.js scene
+        if (this.canvasInstance && typeof this.canvasInstance.setup === 'function' && this.jobInstance) {
+            try {
+                const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                this.canvasInstance.setup(frameData, allStates);
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Canvas3D restore setup error:', e);
+            }
+        }
+
+        this.emit('filterChange', { clientID: null });
+        return true;
     }
 
     /**

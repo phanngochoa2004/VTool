@@ -16,11 +16,13 @@ export class MacOSDock {
         this.isOpen = false;
         this.state = {
             height: 480,
-            viewMode: 'all', // 'all', 'top', 'front', 'side'
+            viewMode: 'all', // 'all', 'top', 'side', 'front'
+            viewOrder: ['top', 'side', 'front'],
             zoom: 1.0,
             pointSize: 1.0,
             cardSize: 'medium',
             activeClientID: null,
+            filteredClientID: null,
             currentFrame: 0,
             framesData: []
         };
@@ -33,6 +35,12 @@ export class MacOSDock {
         this.filmstrip = null;
         this.trackBadge = null;
         this.framesBadge = null;
+        this.filterBadge = null;
+        this.filterInput = null;
+        this.quickFilterBtn = null;
+        this.quickClearBtn = null;
+        this.orderSelect = null;
+        this.emptyState = null;
         this.emptyState = null;
 
         this.initDOM();
@@ -114,7 +122,7 @@ export class MacOSDock {
         iconSvg.appendChild(line);
 
         const titleSpan = document.createElement('span');
-        titleSpan.textContent = '3D QA/QC Inspector';
+        titleSpan.textContent = '3D QA/QC';
         title.appendChild(iconSvg);
         title.appendChild(titleSpan);
 
@@ -128,19 +136,98 @@ export class MacOSDock {
         framesBadge.textContent = '0 frames';
         this.framesBadge = framesBadge;
 
+        // Quick ID Filter Bar (Allows user to quickly filter by Object ID directly inside the dock)
+        const filterBar = document.createElement('div');
+        filterBar.className = 'cvat-qaqc-quick-filter-bar';
+        this.filterBar = filterBar;
+
+        const filterIcon = document.createElement('span');
+        filterIcon.className = 'cvat-qaqc-filter-icon';
+        filterIcon.textContent = '#';
+
+        const filterInput = document.createElement('input');
+        filterInput.type = 'text';
+        filterInput.className = 'cvat-qaqc-quick-filter-input';
+        filterInput.placeholder = 'ID...';
+        filterInput.title = 'Nhập Object ID cần lọc và ấn Enter';
+        this.filterInput = filterInput;
+
+        const filterBtn = document.createElement('button');
+        filterBtn.className = 'cvat-qaqc-quick-filter-btn';
+        filterBtn.textContent = 'Lọc';
+        filterBtn.title = 'Lọc chỉ hiển thị Object ID này (Enter)';
+        this.quickFilterBtn = filterBtn;
+
+        const clearFilterBtn = document.createElement('button');
+        clearFilterBtn.className = 'cvat-qaqc-quick-clear-btn';
+        clearFilterBtn.textContent = '✕';
+        clearFilterBtn.title = 'Bỏ lọc, hiện lại toàn bộ đối tượng';
+        clearFilterBtn.style.display = 'none';
+        this.quickClearBtn = clearFilterBtn;
+
+        const executeFilter = async () => {
+            const rawVal = filterInput.value.trim().replace(/^#/, '');
+            if (!rawVal) return;
+            const targetID = parseInt(rawVal, 10);
+            if (isNaN(targetID)) {
+                filterBar.classList.add('error-shake');
+                setTimeout(() => filterBar.classList.remove('error-shake'), 600);
+                return;
+            }
+            filterBtn.disabled = true;
+            filterBtn.textContent = '...';
+            try {
+                if (typeof this.callbacks.onFilterObject === 'function') {
+                    const success = await this.callbacks.onFilterObject(targetID);
+                    if (success !== false) {
+                        this.setFilteredObjectID(targetID);
+                    } else {
+                        filterBar.classList.add('error-shake');
+                        filterInput.title = `Không tìm thấy Object ID #${targetID}`;
+                        setTimeout(() => filterBar.classList.remove('error-shake'), 600);
+                    }
+                }
+            } finally {
+                filterBtn.disabled = false;
+                filterBtn.textContent = 'Lọc';
+            }
+        };
+
+        filterInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                executeFilter();
+            }
+        });
+        filterBtn.addEventListener('click', () => executeFilter());
+
+        clearFilterBtn.addEventListener('click', async () => {
+            if (typeof this.callbacks.onClearFilter === 'function') {
+                await this.callbacks.onClearFilter();
+            }
+            this.setFilteredObjectID(null);
+            filterInput.value = '';
+        });
+
+        filterBar.appendChild(filterIcon);
+        filterBar.appendChild(filterInput);
+        filterBar.appendChild(filterBtn);
+        filterBar.appendChild(clearFilterBtn);
+
         leftGroup.appendChild(title);
         leftGroup.appendChild(trackBadge);
         leftGroup.appendChild(framesBadge);
+        leftGroup.appendChild(filterBar);
 
         // Right Controls
         const rightGroup = document.createElement('div');
         rightGroup.className = 'cvat-qaqc-right-group';
 
-        // Segmented Control: Views (CVAT Order: Top, Side, Front)
+        // Segmented Control: Views (Top -> Side -> Front)
         const segmented = document.createElement('div');
         segmented.className = 'cvat-qaqc-segmented';
         const viewModes = [
-            { id: 'all', label: 'All 3 Views' },
+            { id: 'all', label: 'All 3' },
             { id: 'top', label: 'Top' },
             { id: 'side', label: 'Side' },
             { id: 'front', label: 'Front' }
@@ -162,9 +249,9 @@ export class MacOSDock {
         sizeSelect.style.colorScheme = 'dark';
         sizeSelect.title = 'Kích thước hiển thị các góc chiếu';
         [
-            { val: 'compact', label: 'Size: Nhỏ (Compact)' },
-            { val: 'medium', label: 'Size: Vừa (Medium)', selected: true },
-            { val: 'large', label: 'Size: Lớn (Large)' }
+            { val: 'compact', label: 'Size: Nhỏ' },
+            { val: 'medium', label: 'Size: Vừa', selected: true },
+            { val: 'large', label: 'Size: Lớn' }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -183,13 +270,13 @@ export class MacOSDock {
         zoomSelect.className = 'cvat-qaqc-select';
         zoomSelect.style.colorScheme = 'dark';
         [
-            { val: '0.4', label: 'Zoom 40%' },
-            { val: '0.6', label: 'Zoom 60%' },
-            { val: '0.8', label: 'Zoom 80%' },
-            { val: '1.0', label: 'Zoom 100%', selected: true },
-            { val: '1.25', label: 'Zoom 125%' },
-            { val: '1.5', label: 'Zoom 150%' },
-            { val: '2.0', label: 'Zoom 200%' }
+            { val: '0.4', label: '40%' },
+            { val: '0.6', label: '60%' },
+            { val: '0.8', label: '80%' },
+            { val: '1.0', label: '100%', selected: true },
+            { val: '1.25', label: '125%' },
+            { val: '1.5', label: '150%' },
+            { val: '2.0', label: '200%' }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -228,17 +315,11 @@ export class MacOSDock {
             this.refreshAllCards();
         });
 
-        // Rotate Buttons Group (Active Frame)
-        const rotGroup = document.createElement('div');
-        rotGroup.className = 'cvat-qaqc-rot-group';
-        this.rotGroup = rotGroup;
-        this.updateToolbarRotateButtons();
-
         // Copy Size Button (Active Frame / Cuboid)
         const copySizeBtn = document.createElement('button');
         copySizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-copy-size-btn';
-        copySizeBtn.textContent = '📋 Copy Size';
-        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn vào clipboard (Alt+Shift+C)';
+        copySizeBtn.textContent = '📋 Copy';
+        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn (Alt+Shift+C)';
         copySizeBtn.addEventListener('click', () => {
             const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
             if (activeCard) {
@@ -248,10 +329,10 @@ export class MacOSDock {
                 if (domSize) {
                     SizeClipboard.copy(domSize);
                     copySizeBtn.classList.add('success-flash');
-                    copySizeBtn.textContent = '✓ Đã Copy!';
+                    copySizeBtn.textContent = '✓ Copy!';
                     setTimeout(() => {
                         copySizeBtn.classList.remove('success-flash');
-                        copySizeBtn.textContent = '📋 Copy Size';
+                        copySizeBtn.textContent = '📋 Copy';
                     }, 1200);
                 }
             }
@@ -260,15 +341,14 @@ export class MacOSDock {
         // Jump to Active Frame Button
         const jumpBtn = document.createElement('button');
         jumpBtn.className = 'cvat-qaqc-btn';
-        jumpBtn.textContent = 'Jump to Active';
+        jumpBtn.textContent = '🎯 Active';
+        jumpBtn.title = 'Cuộn đến frame đang chọn trong CVAT';
         jumpBtn.addEventListener('click', () => this.scrollToActiveFrame());
 
         // Close / Hide Button (Collapses back to floating button)
         const hideBtn = document.createElement('button');
         hideBtn.className = 'cvat-qaqc-btn';
-        const hideSpan = document.createElement('span');
-        hideSpan.textContent = '✕ Ẩn / Hide';
-        hideBtn.appendChild(hideSpan);
+        hideBtn.textContent = '✕ Ẩn';
         hideBtn.title = 'Hide inspector (Alt + Q)';
         hideBtn.addEventListener('click', () => this.close());
 
@@ -276,7 +356,6 @@ export class MacOSDock {
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
-        rightGroup.appendChild(rotGroup);
         rightGroup.appendChild(copySizeBtn);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(hideBtn);
@@ -311,43 +390,7 @@ export class MacOSDock {
     }
 
     updateToolbarRotateButtons() {
-        if (!this.rotGroup) return;
-        this.rotGroup.replaceChildren();
-
-        const mode = this.state.viewMode;
-        const targetView = (mode === 'side' || mode === 'front') ? mode : 'top';
-        const axisName = targetView === 'top' ? 'Yaw (Trục Z)' : (targetView === 'side' ? 'Pitch (Trục X)' : 'Roll (Trục Y)');
-        const isTop = targetView === 'top';
-        const stepDeg = isTop ? 5 : 1;
-        const stepRad = stepDeg * Math.PI / 180;
-
-        this.rotGroup.title = `Xoay góc ${axisName} (Frame đang chọn)`;
-
-        const buttons = [
-            { label: '↺ 90°', delta: -Math.PI / 2, title: `Xoay -90° (${axisName} - Active Frame)` },
-            { label: `↺ ${stepDeg}°`, delta: -stepRad, title: `Xoay -${stepDeg}° (${axisName} - Active Frame)` },
-            { label: `↻ ${stepDeg}°`, delta: stepRad,  title: `Xoay +${stepDeg}° (${axisName} - Active Frame)` },
-            { label: '↻ 90°', delta: Math.PI / 2,  title: `Xoay +90° (${axisName} - Active Frame)` }
-        ];
-
-        buttons.forEach(({ label, delta, title }) => {
-            const btn = document.createElement('button');
-            btn.className = 'cvat-qaqc-rot-btn';
-            btn.textContent = label;
-            btn.title = title;
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
-                if (activeCard) {
-                    if (typeof activeCard.rotateView === 'function') {
-                        activeCard.rotateView(targetView, delta);
-                    } else if (typeof activeCard.rotateBy === 'function') {
-                        activeCard.rotateBy(delta);
-                    }
-                }
-            });
-            this.rotGroup.appendChild(btn);
-        });
+        // Toolbar rotate buttons removed per user preference; each card retains its own rotation controls
     }
 
     setupKeyboardShortcuts() {
@@ -356,6 +399,8 @@ export class MacOSDock {
             if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) {
                 return;
             }
+
+            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
 
             if ((e.altKey || e.metaKey) && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q')) {
                 e.preventDefault();
@@ -387,7 +432,6 @@ export class MacOSDock {
             }
 
             // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
-            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
             if (isCtrlOrCmd && !e.altKey) {
                 if ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
                     // Undo directly on CVAT & UI
@@ -439,13 +483,59 @@ export class MacOSDock {
         console.log(`[CVAT-QAQC] Pasted size (${size.sx} × ${size.sy} × ${size.sz}m) to ${updated} frames`);
     }
 
-    open() {
+    /**
+     * Update active filter state and controls in the header
+     * @param {number|null} clientID
+     */
+    setFilteredObjectID(clientID) {
+        this.state.filteredClientID = clientID;
+        if (this.filterInput) {
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                this.filterInput.value = String(clientID);
+                if (this.quickClearBtn) this.quickClearBtn.style.display = 'inline-flex';
+                if (this.filterBar) this.filterBar.classList.add('is-filtered');
+            } else {
+                this.filterInput.value = '';
+                if (this.quickClearBtn) this.quickClearBtn.style.display = 'none';
+                if (this.filterBar) this.filterBar.classList.remove('is-filtered');
+            }
+        }
+    }
+
+    /**
+     * Set camera view order across all cards
+     * @param {Array<string>} orderArray
+     */
+    setViewOrder(orderArray) {
+        if (!Array.isArray(orderArray) || orderArray.length === 0) return;
+        this.state.viewOrder = [...orderArray];
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                window.localStorage.setItem('cvat_qaqc_view_order', orderArray.join(','));
+            }
+        } catch (_) {}
+
+        if (this.orderSelect && this.orderSelect.value !== orderArray.join(',')) {
+            this.orderSelect.value = orderArray.join(',');
+        }
+
+        for (const card of this.cards.values()) {
+            card.setViewOrder(orderArray);
+        }
+    }
+
+    async open() {
         this.isOpen = true;
         this.dom.classList.add('open');
         this.triggerEl.style.display = 'none'; // Hide trigger when drawer is active
-        if (typeof this.callbacks.onOpen === 'function') {
+
+        // Filter CVAT workspace to target object ID before performing other operations
+        if (typeof this.callbacks.onBeforeOpen === 'function') {
+            await this.callbacks.onBeforeOpen();
+        } else if (typeof this.callbacks.onOpen === 'function') {
             this.callbacks.onOpen();
         }
+
         this.refreshAllCards();
         this.scrollToActiveFrame();
     }
@@ -456,11 +546,11 @@ export class MacOSDock {
         this.triggerEl.style.display = 'flex'; // Restore trigger button
     }
 
-    toggleOpen() {
+    async toggleOpen() {
         if (this.isOpen) {
             this.close();
         } else {
-            this.open();
+            await this.open();
         }
     }
 
@@ -572,7 +662,8 @@ export class MacOSDock {
                 },
                 (frame, isHovered) => {
                     this.hoveredFrame = isHovered ? frame : (this.hoveredFrame === frame ? null : this.hoveredFrame);
-                }
+                },
+                { viewOrder: this.state.viewOrder }
             );
 
             this.cards.set(fData.frame, card);
@@ -616,21 +707,44 @@ export class MacOSDock {
     }
 
     /**
+     * Update frames data across cards (alias for refreshTrackData for backward compatibility)
+     * @param {Array} framesData
+     */
+    updateFramesData(framesData) {
+        this.refreshTrackData(framesData);
+    }
+
+    /**
      * Update active frame highlight
      * @param {number} frameNumber
      * @param {any} pcdCache
      */
     updateActiveFrame(frameNumber, pcdCache) {
+        const prevFrame = this.state.currentFrame;
         this.state.currentFrame = frameNumber;
         this.pcdCache = pcdCache;
 
-        for (const [f, card] of this.cards.entries()) {
-            const pts = pcdCache?.get(f);
-            card.renderViews(pts, f === frameNumber, {
-                viewMode: this.state.viewMode,
-                zoom: this.state.zoom,
-                pointSize: this.state.pointSize
-            });
+        // Fast toggle of active classes on previous and current cards
+        if (prevFrame !== null && prevFrame !== frameNumber) {
+            const prevCard = this.cards.get(prevFrame);
+            if (prevCard && typeof prevCard.setActive === 'function') {
+                prevCard.setActive(false);
+            }
+        }
+
+        const currentCard = this.cards.get(frameNumber);
+        if (currentCard) {
+            if (typeof currentCard.setActive === 'function') {
+                currentCard.setActive(true);
+            }
+            const pts = pcdCache?.get(frameNumber);
+            if (pts) {
+                currentCard.renderViews(pts, true, {
+                    viewMode: this.state.viewMode,
+                    zoom: this.state.zoom,
+                    pointSize: this.state.pointSize
+                });
+            }
         }
 
         if (this.isOpen) {

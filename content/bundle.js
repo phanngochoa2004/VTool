@@ -49,8 +49,9 @@ const ALLOWED_SITES = [
     'https://app.cvat.ai',
     'https://cvat.ai',
 
-    // Hỗ trợ dạng tiền tố: khớp mọi site bắt đầu bằng https://cvat...
-    'https://cvat*',
+    // Custom CVAT Server instances
+    'https://cvat-test.vantixapps.net',
+    'https://cvat*'
 ];
 
 /**
@@ -371,18 +372,18 @@ class OrthoCanvasRenderer {
 
         // Authentic CVAT projection conventions:
         // Top: Local X horizontal (sx), Local Y vertical (sy). Forward (+Y) points UP. Lateral (+X) points RIGHT.
-        // Side: Local Y horizontal (sy), Local Z vertical (sz). Length horizontal, Height vertical.
-        // Front: Local X horizontal (sx), Local Z vertical (sz). Width horizontal, Height vertical.
+        // Front: Looks from Red arrow (+X) towards -X. Green arrow (+Y) is on the RIGHT. Horizontal is sy, Vertical is sz.
+        // Side: Looks from Green arrow (+Y) towards -Y. Red arrow (+X) is on the LEFT. Horizontal is sx, Vertical is sz.
         let dimH = 2;
         let dimV = 4;
 
         if (viewType === 'top') {
             dimH = sx;
             dimV = sy;
-        } else if (viewType === 'side') {
+        } else if (viewType === 'front') {
             dimH = sy;
             dimV = sz;
-        } else if (viewType === 'front') {
+        } else if (viewType === 'side') {
             dimH = sx;
             dimV = sz;
         }
@@ -522,16 +523,16 @@ class OrthoCanvasRenderer {
                     px = centerX + lx * scale;
                     py = centerY - ly * scale;
                     depth = (lz + sz / 2) / Math.max(0.01, sz);
-                } else if (viewType === 'side') {
-                    // Side: Local Y horizontal (sy), Local Z vertical (sz, +Z up)
+                } else if (viewType === 'front') {
+                    // Front: Look from red arrow (+X) towards -X. Green arrow (+Y) is on the RIGHT.
                     px = centerX + ly * scale;
                     py = centerY - lz * scale;
-                    depth = (lx + sx / 2) / Math.max(0.01, sx);
-                } else if (viewType === 'front') {
-                    // Front: Local X horizontal (sx), Local Z vertical (sz, +Z up)
-                    px = centerX + lx * scale;
+                    depth = (sx / 2 - lx) / Math.max(0.01, sx);
+                } else if (viewType === 'side') {
+                    // Side: Look from green arrow (+Y) towards -Y. Red arrow (+X) is on the LEFT.
+                    px = centerX - lx * scale;
                     py = centerY - lz * scale;
-                    depth = (ly + sy / 2) / Math.max(0.01, sy);
+                    depth = (sy / 2 - ly) / Math.max(0.01, sy);
                 }
 
                 if (px < 0 || px > width || py < 0 || py > height) continue;
@@ -618,7 +619,7 @@ class OrthoCanvasRenderer {
             ctx.setLineDash([]);
         }
 
-        // 5. CVAT-style Heading & Rotation Helper (Top view only)
+        // 5. CVAT-style Heading & Rotation Helper
         if (viewType === 'top') {
             this.drawCVATHeadingHelper(
                 ctx,
@@ -631,6 +632,24 @@ class OrthoCanvasRenderer {
                 isHoverRotation,
                 isActivelyRotating
             );
+        } else if (viewType === 'front') {
+            // Front view looks from red arrow (+X). Green arrow (+Y) is on the right.
+            ctx.strokeStyle = '#30D158';
+            ctx.lineWidth = 2.0;
+            ctx.beginPath();
+            ctx.moveTo(boxRight, boxTop);
+            ctx.lineTo(boxRight, boxBottom);
+            ctx.stroke();
+            this.drawArrow(ctx, boxRight, centerY, boxRight + 18, centerY, '#30D158', 6, 1.8);
+        } else if (viewType === 'side') {
+            // Side view looks from green arrow (+Y). Red arrow (+X) is on the left.
+            ctx.strokeStyle = '#FF3B30';
+            ctx.lineWidth = 2.0;
+            ctx.beginPath();
+            ctx.moveTo(boxLeft, boxTop);
+            ctx.lineTo(boxLeft, boxBottom);
+            ctx.stroke();
+            this.drawArrow(ctx, boxLeft, centerY, boxLeft - 18, centerY, '#FF3B30', 6, 1.8);
         }
 
         // 6. CVAT 4 Red Corner Handles (All views)
@@ -658,9 +677,9 @@ class OrthoCanvasRenderer {
         let dimLabel = `${dimH.toFixed(2)}m × ${dimV.toFixed(2)}m`;
         if (viewType === 'top') {
             dimLabel = `W:${sx.toFixed(2)}  L:${sy.toFixed(2)}m`;
-        } else if (viewType === 'side') {
-            dimLabel = `L:${sy.toFixed(2)}  H:${sz.toFixed(2)}m`;
         } else if (viewType === 'front') {
+            dimLabel = `L:${sy.toFixed(2)}  H:${sz.toFixed(2)}m`;
+        } else if (viewType === 'side') {
             dimLabel = `W:${sx.toFixed(2)}  H:${sz.toFixed(2)}m`;
         }
         ctx.fillText(dimLabel, 6, height - 5);
@@ -1050,10 +1069,178 @@ class PCDCache {
  * Track Reader for CVAT 3D Annotations
  * Extracts multi-frame 3D bounding box states for any selected track or object.
  * Pure in-memory: 0 server requests.
+ * Uses CVAT's authentic 3D cuboid shortest-arc interpolation for realtime multi-frame rendering.
  */
 class TrackReader {
     /**
-     * Read cuboid states across all frames for a given object/track
+     * In-memory cache of currently inspected track keyframes
+     * @type {{ clientID: number|null, shapes: Array<Object>, label: Object, startFrame: number, stopFrame: number }}
+     */
+    static currentTrackData = {
+        clientID: null,
+        shapes: [],
+        label: { name: 'Object', color: '#30D158' },
+        startFrame: 0,
+        stopFrame: 0
+    };
+
+    /**
+     * Compute difference between two angles in degrees across the shortest arc
+     * Matches CVAT core object-utils findAngleDiff
+     * @param {number} rightAngle - Target angle in degrees
+     * @param {number} leftAngle - Starting angle in degrees
+     * @returns {number} Angle difference in [-180, 180]
+     */
+    static findAngleDiff(rightAngle, leftAngle) {
+        let angleDiff = rightAngle - leftAngle;
+        angleDiff = ((angleDiff + 180) % 360) - 180;
+        if (Math.abs(angleDiff) >= 180) {
+            angleDiff = 360 - Math.abs(angleDiff) * Math.sign(angleDiff) * -1;
+        }
+        return angleDiff;
+    }
+
+    /**
+     * Interpolate 3D cuboid points between two keyframe positions using CVAT's authentic algorithm
+     * Interpolates position (x,y,z), dimensions (sx,sy,sz), and 3-axis Euler angles (Roll, Pitch, Yaw)
+     * using shortest-arc angular interpolation.
+     * @param {number[]} leftPoints - Array of 16 floats from left keyframe
+     * @param {number[]} rightPoints - Array of 16 floats from right keyframe
+     * @param {number} offset - Normalized time offset in [0, 1]
+     * @returns {number[]} Interpolated points array
+     */
+    static interpolateCuboidPoints(leftPoints, rightPoints, offset) {
+        if (!leftPoints || !rightPoints) return leftPoints || rightPoints || [];
+        const positionOffset = leftPoints.map((point, index) => (rightPoints[index] ?? point) - point);
+        const result = leftPoints.map((point, index) => point + positionOffset[index] * offset);
+
+        // For 3D cuboids, angles at indices 3, 4, 5 (rx, ry, rz in radians)
+        // must be interpolated across the shortest arc on the circle
+        if (leftPoints.length >= 6 && rightPoints.length >= 6) {
+            const leftRad = leftPoints.slice(3, 6);
+            const rightRad = rightPoints.slice(3, 6);
+
+            const [angleX, angleY, angleZ] = leftRad.concat(rightRad)
+                .map((ang) => (ang < 0 ? ang + Math.PI * 2 : ang))
+                .map((ang) => ang * (180 / Math.PI))
+                .reduce((acc, angleBefore, index, arr) => {
+                    if (index < 3) {
+                        const angleAfter = arr[index + 3];
+                        let angle = (angleBefore + TrackReader.findAngleDiff(angleAfter, angleBefore) * offset) * (Math.PI / 180);
+                        if (angle > Math.PI) {
+                            angle -= Math.PI * 2;
+                        }
+                        acc.push(angle);
+                    }
+                    return acc;
+                }, []);
+
+            result[3] = angleX;
+            result[4] = angleY;
+            result[5] = angleZ;
+        }
+
+        return result;
+    }
+
+    /**
+     * Synthesize full-lifespan frame data from a list of keyframe shapes via instant in-memory interpolation.
+     * Runs in < 1ms for hundreds of frames.
+     * @param {Array<{ frame: number, points: number[], outside?: boolean }>} shapes - Exact keyframes
+     * @param {number} startFrame
+     * @param {number} stopFrame
+     * @param {Object} label
+     * @returns {Array<{ frame: number, points: number[], box: Object, keyframe: boolean, outside: boolean, label: Object }>}
+     */
+    static interpolateTrack(shapes, startFrame, stopFrame, label) {
+        if (!Array.isArray(shapes) || shapes.length === 0) return [];
+        const sorted = [...shapes].sort((a, b) => a.frame - b.frame);
+
+        const keyframeMap = new Map();
+        for (const s of sorted) {
+            keyframeMap.set(s.frame, s);
+        }
+
+        const firstKf = sorted[0];
+        const lastKf = sorted[sorted.length - 1];
+        const trackStart = firstKf.frame;
+        const trackEnd = lastKf.outside ? lastKf.frame : (typeof stopFrame === 'number' ? stopFrame : lastKf.frame);
+
+        const results = [];
+        const keyframeNums = sorted.map(s => s.frame);
+
+        for (let f = trackStart; f <= trackEnd; f++) {
+            if (keyframeMap.has(f)) {
+                const kf = keyframeMap.get(f);
+                const points = [...kf.points];
+                results.push({
+                    frame: f,
+                    points,
+                    box: TrackReader.parsePointsToBox(points),
+                    keyframe: true,
+                    outside: !!kf.outside,
+                    label
+                });
+            } else {
+                // Find nearest previous and next keyframes
+                let leftF = null;
+                let rightF = null;
+                for (let i = 0; i < keyframeNums.length; i++) {
+                    if (keyframeNums[i] < f) leftF = keyframeNums[i];
+                    if (keyframeNums[i] > f && rightF === null) {
+                        rightF = keyframeNums[i];
+                        break;
+                    }
+                }
+
+                if (leftF !== null && rightF !== null) {
+                    const leftShape = keyframeMap.get(leftF);
+                    const rightShape = keyframeMap.get(rightF);
+                    if (leftShape.outside) {
+                        const points = [...leftShape.points];
+                        results.push({
+                            frame: f,
+                            points,
+                            box: TrackReader.parsePointsToBox(points),
+                            keyframe: false,
+                            outside: true,
+                            label
+                        });
+                    } else {
+                        const offset = (f - leftF) / (rightF - leftF);
+                        const interpPoints = TrackReader.interpolateCuboidPoints(leftShape.points, rightShape.points, offset);
+                        results.push({
+                            frame: f,
+                            points: interpPoints,
+                            box: TrackReader.parsePointsToBox(interpPoints),
+                            keyframe: false,
+                            outside: false,
+                            label
+                        });
+                    }
+                } else if (leftF !== null && !lastKf.outside) {
+                    // Beyond last keyframe, track remains active holding last known box
+                    const leftShape = keyframeMap.get(leftF);
+                    const points = [...leftShape.points];
+                    results.push({
+                        frame: f,
+                        points,
+                        box: TrackReader.parsePointsToBox(points),
+                        keyframe: false,
+                        outside: false,
+                        label
+                    });
+                }
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * Read cuboid states across all frames for a given object/track.
+     * Uses CVAT's in-memory annotations.export() to retrieve exact keyframes in < 1ms,
+     * then calculates continuous 3D interpolation in realtime.
      * @param {number} clientID - Selected object ID
      * @param {any} jobInstance - CVAT Job instance from Redux store
      * @returns {Promise<Array<{ frame: number, points: number[], box: Object, keyframe: boolean, outside: boolean, label: Object }>>}
@@ -1065,71 +1252,85 @@ class TrackReader {
 
         const startFrame = jobInstance.startFrame || 0;
         const stopFrame = jobInstance.stopFrame || (jobInstance.size ? jobInstance.size - 1 : 0);
-        const results = [];
 
-        // Check in-memory AnnotationsCollection directly if available
-        let directTrack = null;
-        try {
-            // Some CVAT builds attach collection to session or job
-            const cache = window.cvat?._annotationsCache;
-            if (cache && cache.collection && cache.collection.has(jobInstance)) {
-                const { collection } = cache.collection.get(jobInstance);
-                if (collection && collection.objects && collection.objects[clientID]) {
-                    directTrack = collection.objects[clientID];
-                }
-            }
-        } catch (_) {}
+        // 1. Primary path: CVAT in-memory annotations.export() (Fastest & 100% accurate keyframe detection)
+        if (jobInstance.annotations && typeof jobInstance.annotations.export === 'function') {
+            try {
+                const exported = await jobInstance.annotations.export();
+                if (exported) {
+                    // Check if object is a Track
+                    const track = (exported.tracks || []).find(t => t.clientID === clientID || t.id === clientID);
+                    if (track && Array.isArray(track.shapes) && track.shapes.length > 0) {
+                        const label = jobInstance.labels?.find(l => l.id === track.label_id) ||
+                                     track.label || { name: 'Object', color: '#30D158' };
 
-        if (directTrack && typeof directTrack.get === 'function') {
-            // Determine track lifetime bounds from keyframes
-            const keyframeNums = Object.keys(directTrack.shapes || {}).map(Number).sort((a, b) => a - b);
-            const trackStart = keyframeNums.length > 0 ? keyframeNums[0] : startFrame;
-            const lastKey = keyframeNums.length > 0 ? keyframeNums[keyframeNums.length - 1] : stopFrame;
-            const isLastOutside = !!directTrack.shapes?.[lastKey]?.outside;
-            const trackEnd = isLastOutside ? lastKey : stopFrame;
+                        // Cache active track keyframes for live reactive editing
+                        TrackReader.currentTrackData = {
+                            clientID,
+                            shapes: track.shapes.map(s => ({
+                                frame: s.frame,
+                                points: [...(s.points || [])],
+                                outside: !!s.outside,
+                                rotation: s.rotation || 0
+                            })),
+                            label,
+                            startFrame,
+                            stopFrame
+                        };
 
-            // Query the Track object directly across its active frame range
-            for (let f = trackStart; f <= trackEnd; f++) {
-                try {
-                    const data = directTrack.get(f);
-                    // Include both inside AND outside frames (outside frames will not draw box on canvas)
-                    if (data && data.points && data.points.length >= 9) {
-                        results.push({
-                            frame: f,
-                            points: [...data.points],
-                            box: this.parsePointsToBox(data.points),
-                            keyframe: !!data.keyframe,
-                            outside: !!data.outside,
-                            label: directTrack.label || { name: 'Object', color: '#30D158' }
-                        });
+                        const framesData = TrackReader.interpolateTrack(
+                            TrackReader.currentTrackData.shapes,
+                            startFrame,
+                            stopFrame,
+                            label
+                        );
+
+                        if (framesData.length > 0) {
+                            return framesData;
+                        }
                     }
-                } catch (e) {
-                    // Frame might not be interpolatable
+
+                    // Check if object is a standalone single-frame Shape
+                    const shape = (exported.shapes || []).find(s => s.clientID === clientID || s.id === clientID);
+                    if (shape && shape.points && shape.points.length >= 9) {
+                        const label = jobInstance.labels?.find(l => l.id === shape.label_id) ||
+                                     shape.label || { name: 'Object', color: '#30D158' };
+                        return [{
+                            frame: shape.frame,
+                            points: [...shape.points],
+                            box: TrackReader.parsePointsToBox(shape.points),
+                            keyframe: true,
+                            outside: !!shape.outside,
+                            label
+                        }];
+                    }
                 }
+            } catch (err) {
+                console.warn('[CVAT-QAQC] annotations.export failed, falling back to filtered get:', err);
             }
-            return results;
         }
 
-        // Standard path: query job.annotations.get(f, true, []) which evaluates in-memory from collection
+        // 2. Fallback path: query job.annotations.get with isolated objectID filter
+        const filter = [{ and: [{ '==': [{ var: 'objectID' }, clientID] }] }, {}];
+        const results = [];
         const framePromises = [];
+
         for (let f = startFrame; f <= stopFrame; f++) {
             framePromises.push((async (frameNum) => {
                 try {
-                    const states = await jobInstance.annotations.get(frameNum, true, []);
+                    const states = await jobInstance.annotations.get(frameNum, true, filter);
                     if (!Array.isArray(states)) return null;
                     const state = states.find(s => s.clientID === clientID);
                     if (state && state.points && state.points.length >= 9) {
                         const first = state.keyframes?.first;
                         const last = state.keyframes?.last;
-                        // Exclude frames before track was created
                         if (typeof first === 'number' && frameNum < first) return null;
-                        // Exclude frames after track ended with an outside keyframe
                         if (typeof last === 'number' && frameNum > last && state.outside) return null;
 
                         return {
                             frame: frameNum,
                             points: [...state.points],
-                            box: this.parsePointsToBox(state.points),
+                            box: TrackReader.parsePointsToBox(state.points),
                             keyframe: !!state.keyframe,
                             outside: !!state.outside,
                             label: {
@@ -1139,7 +1340,7 @@ class TrackReader {
                             }
                         };
                     }
-                } catch (err) {
+                } catch (_) {
                     return null;
                 }
                 return null;
@@ -1151,9 +1352,51 @@ class TrackReader {
             if (item) results.push(item);
         }
 
-        // Sort by frame ascending
         results.sort((a, b) => a.frame - b.frame);
         return results;
+    }
+
+    /**
+     * Realtime keyframe update and instant re-interpolation for live dock view synchronization.
+     * When the user modifies any cuboid or outside status on a card, this updates the keyframe
+     * and re-interpolates the entire track in < 0.1ms without touching network or reloading.
+     * @param {number} clientID
+     * @param {number} frame
+     * @param {number[]|null} [newPoints]
+     * @param {boolean|null} [outside]
+     * @returns {Array<Object>|null} Updated frames data list for immediate dock refresh
+     */
+    static updateTrackKeyframe(clientID, frame, newPoints = null, outside = null) {
+        if (!TrackReader.currentTrackData || TrackReader.currentTrackData.clientID !== clientID) {
+            return null;
+        }
+
+        const shapes = TrackReader.currentTrackData.shapes;
+        const existingIdx = shapes.findIndex(s => s.frame === frame);
+
+        if (existingIdx !== -1) {
+            // Update existing keyframe
+            if (newPoints) shapes[existingIdx].points = [...newPoints];
+            if (outside !== null) shapes[existingIdx].outside = !!outside;
+        } else {
+            // Promote interpolated frame to a new keyframe
+            const basePoints = newPoints || (shapes.length > 0 ? shapes[0].points : new Array(16).fill(0));
+            shapes.push({
+                frame,
+                points: [...basePoints],
+                outside: outside !== null ? !!outside : false,
+                rotation: 0
+            });
+            shapes.sort((a, b) => a.frame - b.frame);
+        }
+
+        // Re-interpolate all frames in < 0.1ms
+        return TrackReader.interpolateTrack(
+            shapes,
+            TrackReader.currentTrackData.startFrame,
+            TrackReader.currentTrackData.stopFrame,
+            TrackReader.currentTrackData.label
+        );
     }
 
     /**
@@ -1212,13 +1455,15 @@ class CVATHook {
         this.jobInstance = null;
         this.canvasInstance = null;
         this.activeClientID = null;
+        this.activeFilterID = null;
         this.currentFrame = 0;
         this.listeners = {
             objectChange: [],
             frameChange: [],
             canvasReady: [],
             objectUpdated: [],
-            historyChange: []
+            historyChange: [],
+            filterChange: []
         };
         this.isHooked = false;
         this._undoRedoLock = false;
@@ -1326,6 +1571,25 @@ class CVATHook {
         const canvas = state.annotation.canvas?.instance;
         if (canvas && typeof canvas.activatedElementID === 'number') {
             return canvas.activatedElementID;
+        }
+
+        // 3.5 Check active or selected item in DOM objects sidebar
+        if (typeof document !== 'undefined') {
+            try {
+                const activeItem = document.querySelector(
+                    '[class*="objects-sidebar-state-item"][class*="active"], ' +
+                    '.cvat-objects-sidebar-state-item-active, ' +
+                    '[id^="cvat-objects-sidebar-state-item-"].active, ' +
+                    '[id^="cvat-objects-sidebar-state-item-"]:focus-within'
+                );
+                if (activeItem) {
+                    const idMatch = (activeItem.id || '').match(/cvat-objects-sidebar-state-item-(\d+)/);
+                    if (idMatch) return parseInt(idMatch[1], 10);
+                    const numText = activeItem.querySelector('[class*="number"]')?.textContent?.trim() ||
+                                   activeItem.querySelector('span')?.textContent?.match(/#(\d+)/)?.[1];
+                    if (numText && !isNaN(parseInt(numText, 10))) return parseInt(numText, 10);
+                }
+            } catch (_) {}
         }
 
         // 4. Auto-detect: if on current frame there is a 3D cuboid, auto-select it!
@@ -1537,11 +1801,13 @@ class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
                         payload: {
-                            states: freshStates,
+                            states: statesToPush,
                             history
                         }
                     });
@@ -1612,11 +1878,13 @@ class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
                         payload: {
-                            states: freshStates,
+                            states: statesToPush,
                             history
                         }
                     });
@@ -1651,6 +1919,248 @@ class CVATHook {
             console.error('[CVAT-QAQC] Failed to update in-memory outside:', err);
             return false;
         }
+    }
+
+    /**
+     * Ensure CVAT's native FiltersModal dialog is closed/hidden so it never pops up in front of user
+     */
+    closeFilterModalIfOpen() {
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'SWITCH_SHOWING_FILTERS',
+                    payload: { visible: false }
+                });
+            } catch (_) {}
+        }
+        if (typeof document !== 'undefined') {
+            try {
+                const cancelBtn = document.querySelector('.cvat-filters-modal-cancel-button');
+                if (cancelBtn) cancelBtn.click();
+                const silencer = document.getElementById('cvat-qaqc-filter-silencer');
+                if (silencer) silencer.remove();
+            } catch (_) {}
+        }
+
+        // Sanitize broken/corrupt entries from localStorage history (e.g. broken "Not" -> "Select field")
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const historyStr = window.localStorage.getItem('annotationFiltersHistory')?.trim() || '[]';
+                let historyList = JSON.parse(historyStr);
+                if (Array.isArray(historyList)) {
+                    const cleaned = historyList.filter(entry => {
+                        if (!entry || !entry.logic || typeof entry.logic !== 'object') return false;
+                        const s = JSON.stringify(entry.logic);
+                        if (s === '{}' || s.includes('null') || s.includes('Select field')) return false;
+                        return true;
+                    });
+                    window.localStorage.setItem('annotationFiltersHistory', JSON.stringify(cleaned));
+                }
+            }
+        } catch (_) {}
+    }
+
+    /**
+     * Filter CVAT workspace to only show the target object clientID.
+     * Uses CVAT's native JsonLogic query format: { "and": [{ "==": [{ "var": "objectID" }, targetID] }] }
+     * Dispatches CHANGE_ANNOTATIONS_FILTERS & FETCH_ANNOTATIONS_SUCCESS directly to Redux.
+     * This isolates the track in CVAT:
+     * - The Objects sidebar drops to "Items: 1"
+     * - Three.js Canvas3D removes all other tracks from the scene (zero lag)
+     * - Top-bar Filters button becomes active (filters-armed class)
+     * - Opening the native Filters modal cleanly renders "ObjectID == targetID" via react-awesome-query-builder
+     * - NO modal table pops up in front of user
+     * @param {number} clientID
+     * @returns {Promise<boolean>}
+     */
+    async filterByObjectID(clientID) {
+        if (clientID === null || typeof clientID === 'undefined') {
+            return this.clearFilter();
+        }
+
+        const targetID = Number(clientID);
+        if (isNaN(targetID)) return false;
+
+        console.log(`[CVAT-QAQC] Filtering workspace to Object ID #${targetID} (isolating track)...`);
+        this.activeFilterID = targetID;
+
+        // 1. Ensure CVAT filter modal is closed
+        this.closeFilterModalIfOpen();
+
+        // 2. Build CVAT native JsonLogic filter for objectID wrapped in root 'and' group
+        // react-awesome-query-builder and CVAT annotationsFilter require the root 'and' group structure
+        const filterLogic = {
+            and: [
+                { '==': [{ var: 'objectID' }, targetID] }
+            ]
+        };
+        const filters = [filterLogic, {}];
+
+        // 3. Dispatch CHANGE_ANNOTATIONS_FILTERS to CVAT Redux store
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'CHANGE_ANNOTATIONS_FILTERS',
+                    payload: {
+                        filters
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error dispatching CHANGE_ANNOTATIONS_FILTERS:', e);
+            }
+        }
+
+        // 4. Query filtered states from CVAT job annotations using native JsonLogic filter
+        let filteredStates = [];
+        let history = null;
+        if (this.jobInstance) {
+            try {
+                history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                try {
+                    filteredStates = await this.jobInstance.annotations.get(this.currentFrame, true, filters);
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] annotations.get with filters error, fallback to client-side filter:', e);
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                }
+
+                if (!Array.isArray(filteredStates) || filteredStates.length === 0) {
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                }
+
+                // Hide all other states in-memory so Three.js drops draw calls immediately
+                try {
+                    const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    for (const s of allStates) {
+                        if (typeof s.hidden !== 'undefined') {
+                            s.hidden = (s.clientID !== targetID);
+                        }
+                    }
+                } catch (_) {}
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error in job annotations filter:', err);
+            }
+        }
+
+        // 5. Dispatch FETCH_ANNOTATIONS_SUCCESS to update Redux & Objects sidebar (Items: 1)
+        // Note: Do NOT dispatch UPDATE_ANNOTATIONS_SUCCESS here because it merges into prevStates,
+        // which would retain all 80 other objects. FETCH_ANNOTATIONS_SUCCESS replaces states completely!
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'FETCH_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: filteredStates,
+                        intervals: [],
+                        history
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error dispatching FETCH_ANNOTATIONS_SUCCESS:', e);
+            }
+        }
+
+        // 6. Update Canvas3D to immediately remove other objects from Three.js scene
+        if (this.canvasInstance && typeof this.canvasInstance.setup === 'function' && this.jobInstance) {
+            try {
+                const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                this.canvasInstance.setup(frameData, filteredStates);
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Canvas3D setup error:', e);
+            }
+        }
+
+        // 7. Update localStorage filters history so CVAT native modal shows it under Recently Used
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                const historyStr = window.localStorage.getItem('annotationFiltersHistory')?.trim() || '[]';
+                let historyList = JSON.parse(historyStr);
+                if (!Array.isArray(historyList)) historyList = [];
+                const newEntry = {
+                    id: `qaqc-filter-${targetID}`,
+                    logic: filterLogic,
+                    keypointLogic: {}
+                };
+                historyList = [newEntry, ...historyList.filter(f => JSON.stringify(f?.logic) !== JSON.stringify(filterLogic))].slice(0, 10);
+                window.localStorage.setItem('annotationFiltersHistory', JSON.stringify(historyList));
+            }
+        } catch (_) {}
+
+        this.emit('filterChange', { clientID: targetID });
+        return true;
+    }
+
+    /**
+     * Clear object filter and restore all objects on the workspace
+     * @returns {Promise<boolean>}
+     */
+    async clearFilter() {
+        console.log('[CVAT-QAQC] Clearing object filter, restoring all objects...');
+        this.activeFilterID = null;
+
+        // 1. Ensure modal is closed
+        this.closeFilterModalIfOpen();
+
+        // 2. Dispatch CHANGE_ANNOTATIONS_FILTERS with empty array
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'CHANGE_ANNOTATIONS_FILTERS',
+                    payload: {
+                        filters: []
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error clearing CHANGE_ANNOTATIONS_FILTERS:', e);
+            }
+        }
+
+        // 3. Fetch all states and restore
+        let allStates = [];
+        let history = null;
+        if (this.jobInstance) {
+            try {
+                allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                for (const s of allStates) {
+                    if (typeof s.hidden !== 'undefined') {
+                        s.hidden = false;
+                    }
+                }
+            } catch (err) {
+                console.warn('[CVAT-QAQC] Error restoring all object annotations:', err);
+            }
+        }
+
+        // 4. Dispatch FETCH_ANNOTATIONS_SUCCESS to restore Redux states & objects sidebar
+        if (this.store) {
+            try {
+                this.store.dispatch({
+                    type: 'FETCH_ANNOTATIONS_SUCCESS',
+                    payload: {
+                        states: allStates,
+                        intervals: [],
+                        history
+                    }
+                });
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Error restoring Redux annotations on clear:', e);
+            }
+        }
+
+        // 5. Update Canvas3D to restore all objects in Three.js scene
+        if (this.canvasInstance && typeof this.canvasInstance.setup === 'function' && this.jobInstance) {
+            try {
+                const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                this.canvasInstance.setup(frameData, allStates);
+            } catch (e) {
+                console.warn('[CVAT-QAQC] Canvas3D restore setup error:', e);
+            }
+        }
+
+        this.emit('filterChange', { clientID: null });
+        return true;
     }
 
     /**
@@ -2028,8 +2538,9 @@ class FrameCard {
      * @param {Function} [onPasteSizeToAll] - callback when user chooses to paste size to all frames
      * @param {Function} [onToggleOutside] - callback when outside is toggled (frame, outside)
      * @param {Function} [onHover] - callback when mouse enters/leaves card (frame, isHovered)
+     * @param {Object} [options] - additional configuration options (e.g. viewOrder)
      */
-    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover) {
+    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover, options = {}) {
         this.data = data;
         this.frame = data.frame;
         this.onSelectFrame = onSelectFrame;
@@ -2037,12 +2548,19 @@ class FrameCard {
         this.onPasteSizeToAll = onPasteSizeToAll;
         this.onToggleOutside = onToggleOutside;
         this.onHover = onHover;
+        this.options = options || {};
+
+        // Camera order: fixed default 'top,side,front'
+        this.viewOrder = Array.isArray(this.options.viewOrder) && this.options.viewOrder.length === 3
+            ? [...this.options.viewOrder]
+            : ['top', 'side', 'front'];
 
         // Keep deep copy of original state for reset capability
         this.originalBox = { ...(data.box || {}) };
         this.originalPoints = Array.isArray(data.points) ? [...data.points] : [];
 
         this.canvases = {};
+        this.cells = {};
         this.lastPointCloudData = null;
         this.lastRenderOptions = null;
         this.isCurrent = false;
@@ -2085,12 +2603,12 @@ class FrameCard {
         frameSpan.textContent = `Frame ${this.frame}`;
         title.appendChild(frameSpan);
 
-        if (this.data.keyframe) {
-            const kfBadge = document.createElement('span');
-            kfBadge.className = 'cvat-qaqc-keyframe-badge';
-            kfBadge.textContent = 'Keyframe';
-            title.appendChild(kfBadge);
-        }
+        const kfBadge = document.createElement('span');
+        kfBadge.className = 'cvat-qaqc-keyframe-badge';
+        kfBadge.textContent = 'Keyframe';
+        kfBadge.style.display = this.data.keyframe ? 'inline-block' : 'none';
+        this.kfBadge = kfBadge;
+        title.appendChild(kfBadge);
 
         const currentBadge = document.createElement('span');
         currentBadge.className = 'cvat-qaqc-current-badge';
@@ -2183,20 +2701,27 @@ class FrameCard {
             this.triggerJump();
         });
 
-        // 2. Views Grid: CVAT standard order: Top, Side, Front
+        // 2. Views Grid: Configurable order (default: Top, Front, Side)
         const grid = document.createElement('div');
         grid.className = 'cvat-qaqc-views-grid';
         this.grid = grid;
 
-        const views = [
-            { id: 'top', label: 'Top' },
-            { id: 'side', label: 'Side' },
-            { id: 'front', label: 'Front' }
-        ];
+        const viewDefinitions = {
+            top: { id: 'top', label: 'Top' },
+            front: { id: 'front', label: 'Front' },
+            side: { id: 'side', label: 'Side' }
+        };
 
-        for (const { id: viewType, label } of views) {
+        const activeOrder = Array.isArray(this.viewOrder) && this.viewOrder.length === 3
+            ? this.viewOrder
+            : ['top', 'side', 'front'];
+
+        for (const viewType of activeOrder) {
+            const def = viewDefinitions[viewType] || { id: viewType, label: viewType.toUpperCase() };
+            const label = def.label;
             const cell = document.createElement('div');
             cell.className = `cvat-qaqc-view-cell cell-${viewType}`;
+            this.cells[viewType] = cell;
 
             // CVAT-style Header Strip for each view with integrated rotation buttons
             const cellHeader = document.createElement('div');
@@ -2241,6 +2766,21 @@ class FrameCard {
     }
 
     /**
+     * Reorder view cells without destroying DOM or canvases
+     * @param {Array<string>} orderArray
+     */
+    setViewOrder(orderArray) {
+        if (!this.grid || !this.cells || !Array.isArray(orderArray)) return;
+        this.viewOrder = [...orderArray];
+        for (const viewType of orderArray) {
+            const cell = this.cells[viewType];
+            if (cell) {
+                this.grid.appendChild(cell);
+            }
+        }
+    }
+
+    /**
      * Rotate cuboid in specific projection view
      * @param {'top'|'side'|'front'} viewType
      * @param {number} deltaRad - angle increment in radians
@@ -2249,9 +2789,9 @@ class FrameCard {
         if (!this.data.box || this.data.outside) return;
 
         // Top: Yaw (rz, around Z)
-        // Side: Pitch (rx, around X)
-        // Front: Roll (ry, around Y)
-        const propKey = viewType === 'top' ? 'rz' : (viewType === 'side' ? 'rx' : 'ry');
+        // Front: Roll (rx, around X)
+        // Side: Pitch (ry, around Y)
+        const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
         const current = typeof this.data.box[propKey] === 'number' ? this.data.box[propKey] : 0;
         let nextVal = current + deltaRad;
 
@@ -2273,7 +2813,7 @@ class FrameCard {
     createRotateGroup(viewType = 'top', onRotate) {
         const group = document.createElement('div');
         group.className = 'cvat-qaqc-rot-group';
-        const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'side' ? 'Pitch' : 'Roll');
+        const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'front' ? 'Roll' : 'Pitch');
         group.title = `Xoay góc ${axisName}`;
 
         const isTop = viewType === 'top';
@@ -2304,6 +2844,7 @@ class FrameCard {
 
     applyBoxChanges() {
         this.data.points = TrackReader.boxToPoints(this.data.box, this.data.points);
+        this.data.keyframe = true; // Editing an interpolated frame promotes it to a keyframe
 
         if (this.lastPointCloudData && this.lastRenderOptions) {
             this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
@@ -2471,6 +3012,10 @@ class FrameCard {
 
         const isOutside = !!this.data.outside;
 
+        if (this.kfBadge) {
+            this.kfBadge.style.display = this.data.keyframe ? 'inline-block' : 'none';
+        }
+
         if (this.outsideBadge) {
             this.outsideBadge.style.display = isOutside ? 'inline-block' : 'none';
         }
@@ -2507,10 +3052,10 @@ class FrameCard {
                 this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(box.rz ?? 0);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
+                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
+                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
             }
         }
 
@@ -2673,11 +3218,11 @@ class FrameCard {
                 if (viewType === 'top') {
                     d_lx = d_h;
                     d_ly = d_v;
-                } else if (viewType === 'side') {
+                } else if (viewType === 'front') {
                     d_ly = d_h;
                     d_lz = d_v;
-                } else if (viewType === 'front') {
-                    d_lx = d_h;
+                } else if (viewType === 'side') {
+                    d_lx = -d_h;
                     d_lz = d_v;
                 }
 
@@ -2722,13 +3267,13 @@ class FrameCard {
                     d_ly = v_mid;
                     nextSx = newDimH;
                     nextSy = newDimV;
-                } else if (viewType === 'side') {
+                } else if (viewType === 'front') {
                     d_ly = u_mid;
                     d_lz = v_mid;
                     nextSy = newDimH;
                     nextSz = newDimV;
-                } else if (viewType === 'front') {
-                    d_lx = u_mid;
+                } else if (viewType === 'side') {
+                    d_lx = -u_mid;
                     d_lz = v_mid;
                     nextSx = newDimH;
                     nextSz = newDimV;
@@ -2755,9 +3300,9 @@ class FrameCard {
                 if (action === 'resize-left' || action === 'resize-right') {
                     const sign = action === 'resize-right' ? 1 : -1;
                     const deltaM = (dxPx / scale) * sign;
-                    if (viewType === 'top' || viewType === 'front') {
+                    if (viewType === 'top' || viewType === 'side') {
                         this.data.box.sx = Math.max(0.15, parseFloat(((this.data.box.sx || 1) + deltaM).toFixed(3)));
-                    } else if (viewType === 'side') {
+                    } else if (viewType === 'front') {
                         this.data.box.sy = Math.max(0.15, parseFloat(((this.data.box.sy || 1) + deltaM).toFixed(3)));
                     }
                 } else if (action === 'resize-top' || action === 'resize-bottom') {
@@ -2886,6 +3431,21 @@ class FrameCard {
     }
 
     /**
+     * Fast toggle of active frame border and badge without expensive canvas re-render
+     * @param {boolean} isCurrentFrame
+     */
+    setActive(isCurrentFrame) {
+        this.isCurrent = !!isCurrentFrame;
+        if (isCurrentFrame) {
+            this.dom.classList.add('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'inline-block';
+        } else {
+            this.dom.classList.remove('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'none';
+        }
+    }
+
+    /**
      * Render or refresh canvas projections in CVAT order (Top, Side, Front)
      * @param {{ positions: Float32Array, stride: number } | null} pointCloudData
      * @param {boolean} isCurrentFrame
@@ -2968,11 +3528,13 @@ class MacOSDock {
         this.isOpen = false;
         this.state = {
             height: 480,
-            viewMode: 'all', // 'all', 'top', 'front', 'side'
+            viewMode: 'all', // 'all', 'top', 'side', 'front'
+            viewOrder: ['top', 'side', 'front'],
             zoom: 1.0,
             pointSize: 1.0,
             cardSize: 'medium',
             activeClientID: null,
+            filteredClientID: null,
             currentFrame: 0,
             framesData: []
         };
@@ -2985,6 +3547,12 @@ class MacOSDock {
         this.filmstrip = null;
         this.trackBadge = null;
         this.framesBadge = null;
+        this.filterBadge = null;
+        this.filterInput = null;
+        this.quickFilterBtn = null;
+        this.quickClearBtn = null;
+        this.orderSelect = null;
+        this.emptyState = null;
         this.emptyState = null;
 
         this.initDOM();
@@ -3066,7 +3634,7 @@ class MacOSDock {
         iconSvg.appendChild(line);
 
         const titleSpan = document.createElement('span');
-        titleSpan.textContent = '3D QA/QC Inspector';
+        titleSpan.textContent = '3D QA/QC';
         title.appendChild(iconSvg);
         title.appendChild(titleSpan);
 
@@ -3080,19 +3648,98 @@ class MacOSDock {
         framesBadge.textContent = '0 frames';
         this.framesBadge = framesBadge;
 
+        // Quick ID Filter Bar (Allows user to quickly filter by Object ID directly inside the dock)
+        const filterBar = document.createElement('div');
+        filterBar.className = 'cvat-qaqc-quick-filter-bar';
+        this.filterBar = filterBar;
+
+        const filterIcon = document.createElement('span');
+        filterIcon.className = 'cvat-qaqc-filter-icon';
+        filterIcon.textContent = '#';
+
+        const filterInput = document.createElement('input');
+        filterInput.type = 'text';
+        filterInput.className = 'cvat-qaqc-quick-filter-input';
+        filterInput.placeholder = 'ID...';
+        filterInput.title = 'Nhập Object ID cần lọc và ấn Enter';
+        this.filterInput = filterInput;
+
+        const filterBtn = document.createElement('button');
+        filterBtn.className = 'cvat-qaqc-quick-filter-btn';
+        filterBtn.textContent = 'Lọc';
+        filterBtn.title = 'Lọc chỉ hiển thị Object ID này (Enter)';
+        this.quickFilterBtn = filterBtn;
+
+        const clearFilterBtn = document.createElement('button');
+        clearFilterBtn.className = 'cvat-qaqc-quick-clear-btn';
+        clearFilterBtn.textContent = '✕';
+        clearFilterBtn.title = 'Bỏ lọc, hiện lại toàn bộ đối tượng';
+        clearFilterBtn.style.display = 'none';
+        this.quickClearBtn = clearFilterBtn;
+
+        const executeFilter = async () => {
+            const rawVal = filterInput.value.trim().replace(/^#/, '');
+            if (!rawVal) return;
+            const targetID = parseInt(rawVal, 10);
+            if (isNaN(targetID)) {
+                filterBar.classList.add('error-shake');
+                setTimeout(() => filterBar.classList.remove('error-shake'), 600);
+                return;
+            }
+            filterBtn.disabled = true;
+            filterBtn.textContent = '...';
+            try {
+                if (typeof this.callbacks.onFilterObject === 'function') {
+                    const success = await this.callbacks.onFilterObject(targetID);
+                    if (success !== false) {
+                        this.setFilteredObjectID(targetID);
+                    } else {
+                        filterBar.classList.add('error-shake');
+                        filterInput.title = `Không tìm thấy Object ID #${targetID}`;
+                        setTimeout(() => filterBar.classList.remove('error-shake'), 600);
+                    }
+                }
+            } finally {
+                filterBtn.disabled = false;
+                filterBtn.textContent = 'Lọc';
+            }
+        };
+
+        filterInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                executeFilter();
+            }
+        });
+        filterBtn.addEventListener('click', () => executeFilter());
+
+        clearFilterBtn.addEventListener('click', async () => {
+            if (typeof this.callbacks.onClearFilter === 'function') {
+                await this.callbacks.onClearFilter();
+            }
+            this.setFilteredObjectID(null);
+            filterInput.value = '';
+        });
+
+        filterBar.appendChild(filterIcon);
+        filterBar.appendChild(filterInput);
+        filterBar.appendChild(filterBtn);
+        filterBar.appendChild(clearFilterBtn);
+
         leftGroup.appendChild(title);
         leftGroup.appendChild(trackBadge);
         leftGroup.appendChild(framesBadge);
+        leftGroup.appendChild(filterBar);
 
         // Right Controls
         const rightGroup = document.createElement('div');
         rightGroup.className = 'cvat-qaqc-right-group';
 
-        // Segmented Control: Views (CVAT Order: Top, Side, Front)
+        // Segmented Control: Views (Top -> Side -> Front)
         const segmented = document.createElement('div');
         segmented.className = 'cvat-qaqc-segmented';
         const viewModes = [
-            { id: 'all', label: 'All 3 Views' },
+            { id: 'all', label: 'All 3' },
             { id: 'top', label: 'Top' },
             { id: 'side', label: 'Side' },
             { id: 'front', label: 'Front' }
@@ -3114,9 +3761,9 @@ class MacOSDock {
         sizeSelect.style.colorScheme = 'dark';
         sizeSelect.title = 'Kích thước hiển thị các góc chiếu';
         [
-            { val: 'compact', label: 'Size: Nhỏ (Compact)' },
-            { val: 'medium', label: 'Size: Vừa (Medium)', selected: true },
-            { val: 'large', label: 'Size: Lớn (Large)' }
+            { val: 'compact', label: 'Size: Nhỏ' },
+            { val: 'medium', label: 'Size: Vừa', selected: true },
+            { val: 'large', label: 'Size: Lớn' }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -3135,13 +3782,13 @@ class MacOSDock {
         zoomSelect.className = 'cvat-qaqc-select';
         zoomSelect.style.colorScheme = 'dark';
         [
-            { val: '0.4', label: 'Zoom 40%' },
-            { val: '0.6', label: 'Zoom 60%' },
-            { val: '0.8', label: 'Zoom 80%' },
-            { val: '1.0', label: 'Zoom 100%', selected: true },
-            { val: '1.25', label: 'Zoom 125%' },
-            { val: '1.5', label: 'Zoom 150%' },
-            { val: '2.0', label: 'Zoom 200%' }
+            { val: '0.4', label: '40%' },
+            { val: '0.6', label: '60%' },
+            { val: '0.8', label: '80%' },
+            { val: '1.0', label: '100%', selected: true },
+            { val: '1.25', label: '125%' },
+            { val: '1.5', label: '150%' },
+            { val: '2.0', label: '200%' }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -3180,17 +3827,11 @@ class MacOSDock {
             this.refreshAllCards();
         });
 
-        // Rotate Buttons Group (Active Frame)
-        const rotGroup = document.createElement('div');
-        rotGroup.className = 'cvat-qaqc-rot-group';
-        this.rotGroup = rotGroup;
-        this.updateToolbarRotateButtons();
-
         // Copy Size Button (Active Frame / Cuboid)
         const copySizeBtn = document.createElement('button');
         copySizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-copy-size-btn';
-        copySizeBtn.textContent = '📋 Copy Size';
-        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn vào clipboard (Alt+Shift+C)';
+        copySizeBtn.textContent = '📋 Copy';
+        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn (Alt+Shift+C)';
         copySizeBtn.addEventListener('click', () => {
             const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
             if (activeCard) {
@@ -3200,10 +3841,10 @@ class MacOSDock {
                 if (domSize) {
                     SizeClipboard.copy(domSize);
                     copySizeBtn.classList.add('success-flash');
-                    copySizeBtn.textContent = '✓ Đã Copy!';
+                    copySizeBtn.textContent = '✓ Copy!';
                     setTimeout(() => {
                         copySizeBtn.classList.remove('success-flash');
-                        copySizeBtn.textContent = '📋 Copy Size';
+                        copySizeBtn.textContent = '📋 Copy';
                     }, 1200);
                 }
             }
@@ -3212,15 +3853,14 @@ class MacOSDock {
         // Jump to Active Frame Button
         const jumpBtn = document.createElement('button');
         jumpBtn.className = 'cvat-qaqc-btn';
-        jumpBtn.textContent = 'Jump to Active';
+        jumpBtn.textContent = '🎯 Active';
+        jumpBtn.title = 'Cuộn đến frame đang chọn trong CVAT';
         jumpBtn.addEventListener('click', () => this.scrollToActiveFrame());
 
         // Close / Hide Button (Collapses back to floating button)
         const hideBtn = document.createElement('button');
         hideBtn.className = 'cvat-qaqc-btn';
-        const hideSpan = document.createElement('span');
-        hideSpan.textContent = '✕ Ẩn / Hide';
-        hideBtn.appendChild(hideSpan);
+        hideBtn.textContent = '✕ Ẩn';
         hideBtn.title = 'Hide inspector (Alt + Q)';
         hideBtn.addEventListener('click', () => this.close());
 
@@ -3228,7 +3868,6 @@ class MacOSDock {
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
-        rightGroup.appendChild(rotGroup);
         rightGroup.appendChild(copySizeBtn);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(hideBtn);
@@ -3263,43 +3902,7 @@ class MacOSDock {
     }
 
     updateToolbarRotateButtons() {
-        if (!this.rotGroup) return;
-        this.rotGroup.replaceChildren();
-
-        const mode = this.state.viewMode;
-        const targetView = (mode === 'side' || mode === 'front') ? mode : 'top';
-        const axisName = targetView === 'top' ? 'Yaw (Trục Z)' : (targetView === 'side' ? 'Pitch (Trục X)' : 'Roll (Trục Y)');
-        const isTop = targetView === 'top';
-        const stepDeg = isTop ? 5 : 1;
-        const stepRad = stepDeg * Math.PI / 180;
-
-        this.rotGroup.title = `Xoay góc ${axisName} (Frame đang chọn)`;
-
-        const buttons = [
-            { label: '↺ 90°', delta: -Math.PI / 2, title: `Xoay -90° (${axisName} - Active Frame)` },
-            { label: `↺ ${stepDeg}°`, delta: -stepRad, title: `Xoay -${stepDeg}° (${axisName} - Active Frame)` },
-            { label: `↻ ${stepDeg}°`, delta: stepRad,  title: `Xoay +${stepDeg}° (${axisName} - Active Frame)` },
-            { label: '↻ 90°', delta: Math.PI / 2,  title: `Xoay +90° (${axisName} - Active Frame)` }
-        ];
-
-        buttons.forEach(({ label, delta, title }) => {
-            const btn = document.createElement('button');
-            btn.className = 'cvat-qaqc-rot-btn';
-            btn.textContent = label;
-            btn.title = title;
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
-                if (activeCard) {
-                    if (typeof activeCard.rotateView === 'function') {
-                        activeCard.rotateView(targetView, delta);
-                    } else if (typeof activeCard.rotateBy === 'function') {
-                        activeCard.rotateBy(delta);
-                    }
-                }
-            });
-            this.rotGroup.appendChild(btn);
-        });
+        // Toolbar rotate buttons removed per user preference; each card retains its own rotation controls
     }
 
     setupKeyboardShortcuts() {
@@ -3308,6 +3911,8 @@ class MacOSDock {
             if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) {
                 return;
             }
+
+            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
 
             if ((e.altKey || e.metaKey) && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q')) {
                 e.preventDefault();
@@ -3339,7 +3944,6 @@ class MacOSDock {
             }
 
             // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
-            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
             if (isCtrlOrCmd && !e.altKey) {
                 if ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
                     // Undo directly on CVAT & UI
@@ -3391,13 +3995,59 @@ class MacOSDock {
         console.log(`[CVAT-QAQC] Pasted size (${size.sx} × ${size.sy} × ${size.sz}m) to ${updated} frames`);
     }
 
-    open() {
+    /**
+     * Update active filter state and controls in the header
+     * @param {number|null} clientID
+     */
+    setFilteredObjectID(clientID) {
+        this.state.filteredClientID = clientID;
+        if (this.filterInput) {
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                this.filterInput.value = String(clientID);
+                if (this.quickClearBtn) this.quickClearBtn.style.display = 'inline-flex';
+                if (this.filterBar) this.filterBar.classList.add('is-filtered');
+            } else {
+                this.filterInput.value = '';
+                if (this.quickClearBtn) this.quickClearBtn.style.display = 'none';
+                if (this.filterBar) this.filterBar.classList.remove('is-filtered');
+            }
+        }
+    }
+
+    /**
+     * Set camera view order across all cards
+     * @param {Array<string>} orderArray
+     */
+    setViewOrder(orderArray) {
+        if (!Array.isArray(orderArray) || orderArray.length === 0) return;
+        this.state.viewOrder = [...orderArray];
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                window.localStorage.setItem('cvat_qaqc_view_order', orderArray.join(','));
+            }
+        } catch (_) {}
+
+        if (this.orderSelect && this.orderSelect.value !== orderArray.join(',')) {
+            this.orderSelect.value = orderArray.join(',');
+        }
+
+        for (const card of this.cards.values()) {
+            card.setViewOrder(orderArray);
+        }
+    }
+
+    async open() {
         this.isOpen = true;
         this.dom.classList.add('open');
         this.triggerEl.style.display = 'none'; // Hide trigger when drawer is active
-        if (typeof this.callbacks.onOpen === 'function') {
+
+        // Filter CVAT workspace to target object ID before performing other operations
+        if (typeof this.callbacks.onBeforeOpen === 'function') {
+            await this.callbacks.onBeforeOpen();
+        } else if (typeof this.callbacks.onOpen === 'function') {
             this.callbacks.onOpen();
         }
+
         this.refreshAllCards();
         this.scrollToActiveFrame();
     }
@@ -3408,11 +4058,11 @@ class MacOSDock {
         this.triggerEl.style.display = 'flex'; // Restore trigger button
     }
 
-    toggleOpen() {
+    async toggleOpen() {
         if (this.isOpen) {
             this.close();
         } else {
-            this.open();
+            await this.open();
         }
     }
 
@@ -3524,7 +4174,8 @@ class MacOSDock {
                 },
                 (frame, isHovered) => {
                     this.hoveredFrame = isHovered ? frame : (this.hoveredFrame === frame ? null : this.hoveredFrame);
-                }
+                },
+                { viewOrder: this.state.viewOrder }
             );
 
             this.cards.set(fData.frame, card);
@@ -3568,21 +4219,44 @@ class MacOSDock {
     }
 
     /**
+     * Update frames data across cards (alias for refreshTrackData for backward compatibility)
+     * @param {Array} framesData
+     */
+    updateFramesData(framesData) {
+        this.refreshTrackData(framesData);
+    }
+
+    /**
      * Update active frame highlight
      * @param {number} frameNumber
      * @param {any} pcdCache
      */
     updateActiveFrame(frameNumber, pcdCache) {
+        const prevFrame = this.state.currentFrame;
         this.state.currentFrame = frameNumber;
         this.pcdCache = pcdCache;
 
-        for (const [f, card] of this.cards.entries()) {
-            const pts = pcdCache?.get(f);
-            card.renderViews(pts, f === frameNumber, {
-                viewMode: this.state.viewMode,
-                zoom: this.state.zoom,
-                pointSize: this.state.pointSize
-            });
+        // Fast toggle of active classes on previous and current cards
+        if (prevFrame !== null && prevFrame !== frameNumber) {
+            const prevCard = this.cards.get(prevFrame);
+            if (prevCard && typeof prevCard.setActive === 'function') {
+                prevCard.setActive(false);
+            }
+        }
+
+        const currentCard = this.cards.get(frameNumber);
+        if (currentCard) {
+            if (typeof currentCard.setActive === 'function') {
+                currentCard.setActive(true);
+            }
+            const pts = pcdCache?.get(frameNumber);
+            if (pts) {
+                currentCard.renderViews(pts, true, {
+                    viewMode: this.state.viewMode,
+                    zoom: this.state.zoom,
+                    pointSize: this.state.pointSize
+                });
+            }
         }
 
         if (this.isOpen) {
@@ -3645,26 +4319,138 @@ class MacOSDock {
         return;
     }
 
+    if (window.__CVAT_QAQC_INJECTED__) {
+        console.log('[CVAT-QAQC] Already initialized, skipping duplicate injection.');
+        return;
+    }
+    window.__CVAT_QAQC_INJECTED__ = true;
+
     console.log('[CVAT-QAQC] Allowed CVAT site detected. Initializing 3D QA/QC Inspector...');
 
     const pcdCache = new PCDCache();
     const hook = new CVATHook();
 
+    let currentTrackFrames = [];
+    let currentClientID = null;
+
     const dock = new MacOSDock({
+        onBeforeOpen: async () => {
+            // Khi nhấn bật UI extension, thực hiện filter object ID đúng ID đó TRƯỚC KHI xử lý các tác vụ khác
+            let clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+
+            // Fallback auto-detection: Nếu chưa chọn track nào, tự động lấy track 3D cuboid đầu tiên trên frame hiện tại
+            if ((clientID === null || typeof clientID === 'undefined') && hook.jobInstance) {
+                try {
+                    const states = await hook.jobInstance.annotations.get(hook.currentFrame, true, []);
+                    const cuboid = states.find(s => s.shapeType === 'cuboid' || (s.points && s.points.length >= 9));
+                    if (cuboid && typeof cuboid.clientID === 'number') {
+                        clientID = cuboid.clientID;
+                        hook.activeClientID = clientID;
+                        currentClientID = clientID;
+                    }
+                } catch (_) {}
+            }
+
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                console.log(`[CVAT-QAQC] UI Extension opened. Filtering workspace to Object ID #${clientID} FIRST...`);
+                await hook.filterByObjectID(clientID);
+                dock.setFilteredObjectID(clientID);
+
+                // Nạp frames cho track này nếu chưa nạp
+                if (hook.jobInstance && (currentClientID !== clientID || currentTrackFrames.length === 0)) {
+                    try {
+                        currentClientID = clientID;
+                        currentTrackFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
+                        dock.updateTrack(clientID, currentTrackFrames, hook.currentFrame, pcdCache);
+                        const frameNumbers = currentTrackFrames.map(f => f.frame);
+                        pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                            dock.updateCardPointCloud(loadedFrame, pts);
+                        });
+                    } catch (err) {
+                        console.warn('[CVAT-QAQC] Error loading track frames in onBeforeOpen:', err);
+                    }
+                }
+            }
+        },
         onOpen: () => hook.refreshActiveObject(),
+        onFilterObject: async (id) => {
+            if (!hook.jobInstance) return false;
+            const targetID = Number(id);
+            if (isNaN(targetID)) return false;
+
+            console.log(`[CVAT-QAQC] User requested quick filter for Object ID #${targetID}...`);
+
+            // 1. Isolate in CVAT (Three.js and Redux)
+            await hook.filterByObjectID(targetID);
+            dock.setFilteredObjectID(targetID);
+
+            // 2. Load track frames for this ID
+            try {
+                const trackFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
+                if (trackFrames && trackFrames.length > 0) {
+                    currentClientID = targetID;
+                    currentTrackFrames = trackFrames;
+
+                    // If current frame is outside the track, jump to the track's first frame
+                    const hasCurrent = trackFrames.some(f => f.frame === hook.currentFrame);
+                    const targetFrame = hasCurrent ? hook.currentFrame : trackFrames[0].frame;
+                    if (!hasCurrent) {
+                        hook.jumpToFrame(targetFrame);
+                    }
+
+                    dock.updateTrack(targetID, trackFrames, targetFrame, pcdCache);
+                    const frameNumbers = trackFrames.map(f => f.frame);
+                    pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                        dock.updateCardPointCloud(loadedFrame, pts);
+                    });
+                    return true;
+                } else {
+                    console.warn(`[CVAT-QAQC] Track #${targetID} has no frames or does not exist`);
+                    return false;
+                }
+            } catch (err) {
+                console.warn(`[CVAT-QAQC] Error loading track #${targetID}:`, err);
+                return false;
+            }
+        },
+        onClearFilter: async () => {
+            await hook.clearFilter();
+            dock.setFilteredObjectID(null);
+        },
         onJumpToFrame: (f) => hook.jumpToFrame(f),
         onUndo: () => hook.undo(),
         onRedo: () => hook.redo(),
         onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
+            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
+            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints, null);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
+            }
+
+            // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectCuboid(frame, clientID, newPoints);
         },
         onUpdateOutside: async (frame, clientID, outside) => {
+            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
+            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, null, outside);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
+            }
+
+            // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectOutside(frame, clientID, outside);
         }
     });
-
-    let currentTrackFrames = [];
-    let currentClientID = null;
 
     // Listen for object selection change (track or shape)
     hook.on('objectChange', async ({ clientID, job, canvas, frame }) => {
@@ -3677,7 +4463,15 @@ class MacOSDock {
         if (clientID === null) {
             currentTrackFrames = [];
             dock.updateTrack(null, [], frame, pcdCache);
+            dock.setFilteredObjectID(null);
             return;
+        }
+
+        // Nếu Dock đang mở và người dùng click vào track mới, tự động lọc ngay sang track ID mới này
+        if (dock.isOpen) {
+            console.log(`[CVAT-QAQC] Dock is active. Auto-filtering workspace to newly clicked Track #${clientID}...`);
+            await hook.filterByObjectID(clientID);
+            dock.setFilteredObjectID(clientID);
         }
 
         console.log(`[CVAT-QAQC] Selected Object / Track #${clientID}. Extracting all frames in-memory...`);

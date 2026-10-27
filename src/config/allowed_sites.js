@@ -31,8 +31,9 @@ export const ALLOWED_SITES = [
     'https://app.cvat.ai',
     'https://cvat.ai',
 
-    // Hỗ trợ dạng tiền tố: khớp mọi site bắt đầu bằng https://cvat...
-    'https://cvat*',
+    // Custom CVAT Server instances
+    'https://cvat-test.vantixapps.net',
+    'https://cvat*'
 ];
 
 /**

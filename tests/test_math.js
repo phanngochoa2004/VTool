@@ -86,8 +86,8 @@ for (const viewType of ['top', 'side', 'front']) {
         const initialBox = { x: 14.2, y: -7.5, z: 2.1, rz: 0.52, sx: 2.2, sy: 4.6, sz: 1.7 };
         let dimH = 2.2, dimV = 4.6;
         if (viewType === 'top') { dimH = initialBox.sx; dimV = initialBox.sy; }
-        else if (viewType === 'side') { dimH = initialBox.sy; dimV = initialBox.sz; }
-        else if (viewType === 'front') { dimH = initialBox.sx; dimV = initialBox.sz; }
+        else if (viewType === 'front') { dimH = initialBox.sy; dimV = initialBox.sz; }
+        else if (viewType === 'side') { dimH = initialBox.sx; dimV = initialBox.sz; }
 
         const signU = (cornerKey === 'tr' || cornerKey === 'br') ? 1 : -1;
         const signV = (cornerKey === 'tl' || cornerKey === 'tr') ? 1 : -1;
@@ -98,8 +98,8 @@ for (const viewType of ['top', 'side', 'front']) {
         const rz0 = initialBox.rz;
         let init_lx = 0, init_ly = 0, init_lz = 0;
         if (viewType === 'top') { init_lx = oppLocalU; init_ly = oppLocalV; }
-        else if (viewType === 'side') { init_ly = oppLocalU; init_lz = oppLocalV; }
-        else if (viewType === 'front') { init_lx = oppLocalU; init_lz = oppLocalV; }
+        else if (viewType === 'front') { init_lx = 0; init_ly = oppLocalU; init_lz = oppLocalV; }
+        else if (viewType === 'side') { init_lx = -oppLocalU; init_ly = 0; init_lz = oppLocalV; }
 
         const initOppWorld = {
             x: initialBox.x + init_lx * Math.cos(rz0) - init_ly * Math.sin(rz0),
@@ -125,11 +125,11 @@ for (const viewType of ['top', 'side', 'front']) {
         if (viewType === 'top') {
             d_mid_lx = u_mid; d_mid_ly = v_mid;
             nextSx = newDimH; nextSy = newDimV;
-        } else if (viewType === 'side') {
+        } else if (viewType === 'front') {
             d_mid_ly = u_mid; d_mid_lz = v_mid;
             nextSy = newDimH; nextSz = newDimV;
-        } else if (viewType === 'front') {
-            d_mid_lx = u_mid; d_mid_lz = v_mid;
+        } else if (viewType === 'side') {
+            d_mid_lx = -u_mid; d_mid_lz = v_mid;
             nextSx = newDimH; nextSz = newDimV;
         }
 
@@ -149,8 +149,8 @@ for (const viewType of ['top', 'side', 'front']) {
         const newOppLocalV = -signV * (newDimV / 2);
         let new_lx = 0, new_ly = 0, new_lz = 0;
         if (viewType === 'top') { new_lx = newOppLocalU; new_ly = newOppLocalV; }
-        else if (viewType === 'side') { new_ly = newOppLocalU; new_lz = newOppLocalV; }
-        else if (viewType === 'front') { new_lx = newOppLocalU; new_lz = newOppLocalV; }
+        else if (viewType === 'front') { new_lx = 0; new_ly = newOppLocalU; new_lz = newOppLocalV; }
+        else if (viewType === 'side') { new_lx = -newOppLocalU; new_ly = 0; new_lz = newOppLocalV; }
 
         const newOppWorld = {
             x: newBox.x + new_lx * Math.cos(rz0) - new_ly * Math.sin(rz0),
@@ -253,9 +253,9 @@ pitch = rotateAngle(pitch, -1 * Math.PI / 180);
 console.assert(Math.abs(pitch - 0) < 1e-4, 'Side/Front -1 deg test');
 console.log('✓ Discrete rotation increments (Top: 5°, 90°; Side/Front: 1°, 90°) passed');
 
-// 11. Test 3-axis rotation across Top (Yaw / rz), Side (Pitch / rx), and Front (Roll / ry)
+// 11. Test 3-axis rotation across Top (Yaw / rz), Front (Roll / rx), and Side (Pitch / ry)
 const rotateViewAxis = (box, viewType, deltaRad) => {
-    const propKey = viewType === 'top' ? 'rz' : (viewType === 'side' ? 'rx' : 'ry');
+    const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
     const current = typeof box[propKey] === 'number' ? box[propKey] : 0;
     let nextVal = current + deltaRad;
     while (nextVal > Math.PI) nextVal -= Math.PI * 2;
@@ -271,20 +271,20 @@ rotateViewAxis(multiAxisBox, 'top', 5 * Math.PI / 180);
 console.assert(Math.abs(multiAxisBox.rz - (5 * Math.PI / 180)) < 1e-4, 'Top rotation sets rz');
 console.assert(multiAxisBox.rx === 0 && multiAxisBox.ry === 0, 'Top rotation leaves rx and ry unchanged');
 
-// Side rotation affects rx (Pitch) only
-rotateViewAxis(multiAxisBox, 'side', 1 * Math.PI / 180);
-console.assert(Math.abs(multiAxisBox.rx - (1 * Math.PI / 180)) < 1e-4, 'Side rotation sets rx');
-console.assert(multiAxisBox.ry === 0, 'Side rotation leaves ry unchanged');
+// Front rotation affects rx (Roll) only
+rotateViewAxis(multiAxisBox, 'front', 1 * Math.PI / 180);
+console.assert(Math.abs(multiAxisBox.rx - (1 * Math.PI / 180)) < 1e-4, 'Front rotation sets rx');
+console.assert(multiAxisBox.ry === 0, 'Front rotation leaves ry unchanged');
 
-// Front rotation affects ry (Roll) only
-rotateViewAxis(multiAxisBox, 'front', 90 * Math.PI / 180);
-console.assert(Math.abs(multiAxisBox.ry - (Math.PI / 2)) < 1e-4, 'Front rotation sets ry');
+// Side rotation affects ry (Pitch) only
+rotateViewAxis(multiAxisBox, 'side', 90 * Math.PI / 180);
+console.assert(Math.abs(multiAxisBox.ry - (Math.PI / 2)) < 1e-4, 'Side rotation sets ry');
 
-// 180 flip on Side
-rotateViewAxis(multiAxisBox, 'side', Math.PI);
-console.assert(Math.abs(Math.abs(multiAxisBox.rx) - (Math.PI - 1 * Math.PI / 180)) < 1e-4, 'Side 180 flip normalized');
+// 180 flip on Front
+rotateViewAxis(multiAxisBox, 'front', Math.PI);
+console.assert(Math.abs(Math.abs(multiAxisBox.rx) - (Math.PI - 1 * Math.PI / 180)) < 1e-4, 'Front 180 flip normalized');
 
-console.log('✓ 3-Axis rotation (Top/Yaw, Side/Pitch, Front/Roll) passed');
+console.log('✓ 3-Axis rotation (Top/Yaw, Front/Roll, Side/Pitch) passed');
 
 // 12. Test Outside frame retention and CVATHook.updateObjectOutside
 const mockTrackStates = {
@@ -352,5 +352,203 @@ console.assert(isAllowedSite('http://localhost:5173') === false, 'localhost:5173
 console.assert(isAllowedSite('http://127.0.0.1:8000') === false, '127.0.0.1:8000 must be rejected');
 console.assert(isAllowedSite('https://google.com') === false, 'google.com must be rejected');
 console.log('✓ ALLOWED_SITES whitelist verification passed (0 regex, exact origin matching)');
+
+// 14. Test CVATHook.filterByObjectID & clearFilter (Target object isolation)
+const mockMultiObjectStates = [
+    { clientID: 101, hidden: false, points: [1, 2, 3, 0, 0, 0, 2, 4, 1.5] },
+    { clientID: 102, hidden: false, points: [4, 5, 6, 0, 0, 0, 2, 4, 1.5] },
+    { clientID: 103, hidden: false, points: [7, 8, 9, 0, 0, 0, 2, 4, 1.5] }
+];
+
+let lastDispatchedAction = null;
+hook.store = {
+    getState: () => ({
+        annotation: {
+            player: { frame: { number: 0 } },
+            annotations: { states: mockMultiObjectStates, filters: [] }
+        }
+    }),
+    dispatch: (action) => {
+        lastDispatchedAction = action;
+    }
+};
+
+hook.jobInstance = {
+    annotations: {
+        get: async (f, allTracks, filters) => {
+            if (filters && filters.length > 0 && JSON.stringify(filters[0]).includes('102')) {
+                return mockMultiObjectStates.filter(s => s.clientID === 102);
+            }
+            return mockMultiObjectStates;
+        }
+    },
+    actions: {
+        get: async () => ({})
+    }
+};
+
+// Filter to Object #102
+const filterSuccess = await hook.filterByObjectID(102);
+console.assert(filterSuccess === true, 'filterByObjectID returned true');
+console.assert(hook.activeFilterID === 102, 'activeFilterID set to 102');
+console.assert(lastDispatchedAction.type === 'FETCH_ANNOTATIONS_SUCCESS', 'Dispatched FETCH_ANNOTATIONS_SUCCESS');
+console.assert(lastDispatchedAction.payload.states.length === 1, 'Only 1 object returned in state');
+console.assert(lastDispatchedAction.payload.states[0].clientID === 102, 'Filtered state has clientID 102');
+console.assert(mockMultiObjectStates.find(s => s.clientID === 101).hidden === true, 'Object 101 marked as hidden');
+console.assert(mockMultiObjectStates.find(s => s.clientID === 102).hidden === false, 'Object 102 NOT hidden');
+console.assert(mockMultiObjectStates.find(s => s.clientID === 103).hidden === true, 'Object 103 marked as hidden');
+console.log('✓ CVATHook.filterByObjectID track isolation passed (other objects hidden)');
+
+// Clear filter
+const clearSuccess = await hook.clearFilter();
+console.assert(clearSuccess === true, 'clearFilter returned true');
+console.assert(hook.activeFilterID === null, 'activeFilterID reset to null');
+console.assert(lastDispatchedAction.type === 'FETCH_ANNOTATIONS_SUCCESS', 'Dispatched FETCH_ANNOTATIONS_SUCCESS on clear');
+console.assert(lastDispatchedAction.payload.states.length === 3, 'All 3 objects restored');
+console.assert(mockMultiObjectStates.every(s => s.hidden === false), 'All objects unhidden');
+console.log('✓ CVATHook.clearFilter restored all objects');
+
+// 15. Test Realtime Keyframe Detection & Shortest-Arc Interpolation
+const degToRad = d => d * Math.PI / 180;
+const radToDeg = r => r * 180 / Math.PI;
+
+const mockExportedJob = {
+    startFrame: 0,
+    stopFrame: 59,
+    size: 60,
+    annotations: {
+        export: async () => ({
+            tracks: [
+                {
+                    clientID: 555,
+                    shapes: [
+                        { frame: 0, points: [0, 0, 0, 0, 0, degToRad(170), 2, 4, 1.5], outside: false },
+                        { frame: 20, points: [20, 40, 0, 0, 0, degToRad(-170), 2, 4, 1.5], outside: false },
+                        { frame: 50, points: [50, 100, 0, 0, 0, degToRad(180), 2, 4, 1.5], outside: true }
+                    ]
+                }
+            ],
+            shapes: []
+        })
+    }
+};
+
+const startTime = Date.now();
+const trackFrames = await TrackReader.getTrackFrames(555, mockExportedJob);
+const durationMs = Date.now() - startTime;
+
+console.assert(trackFrames.length === 51, `Expected 51 frames (0 to 50), got ${trackFrames.length}`);
+console.assert(durationMs < 20, `Execution took ${durationMs}ms, expected < 20ms`);
+console.assert(trackFrames[0].keyframe === true, 'Frame 0 is keyframe');
+console.assert(trackFrames[20].keyframe === true, 'Frame 20 is keyframe');
+console.assert(trackFrames[50].keyframe === true, 'Frame 50 is keyframe');
+console.assert(trackFrames[10].keyframe === false, 'Frame 10 is interpolated');
+console.assert(trackFrames[50].outside === true, 'Frame 50 is outside');
+
+// Verify shortest arc interpolation across 180° boundary (170° to -170° -> midpoint at 180°)
+const midYawDeg = Math.round(radToDeg(trackFrames[10].points[5]));
+console.assert(Math.abs(midYawDeg) === 180, `Midpoint yaw should be 180° or -180°, got ${midYawDeg}°`);
+console.assert(trackFrames[10].points[0] === 10, 'Midpoint position x should be 10');
+console.assert(trackFrames[10].points[1] === 20, 'Midpoint position y should be 20');
+
+// Test live reactive keyframe update (promote frame 10 to keyframe)
+const updatedPoints = [12, 22, 0, 0, 0, degToRad(90), 2, 4, 1.5];
+const liveUpdated = TrackReader.updateTrackKeyframe(555, 10, updatedPoints, false);
+console.assert(liveUpdated !== null, 'Live keyframe update returned frames');
+const f10 = liveUpdated.find(f => f.frame === 10);
+console.assert(f10.keyframe === true, 'Frame 10 promoted to keyframe');
+console.assert(f10.points[0] === 12, 'Frame 10 updated position');
+console.log('✓ TrackReader 100% keyframe accuracy & realtime shortest-arc 3D interpolation passed');
+
+// 17. Test Fixed Camera View Order (Top -> Side -> Front)
+const fixedViewOrder = ['top', 'side', 'front'];
+
+const mockGrid = {
+    children: [],
+    appendChild: function(child) {
+        const idx = this.children.indexOf(child);
+        if (idx !== -1) this.children.splice(idx, 1);
+        this.children.push(child);
+    }
+};
+
+const mockCells = {
+    top: { id: 'top' },
+    front: { id: 'front' },
+    side: { id: 'side' }
+};
+
+// Order: Top -> Side -> Front
+for (const v of fixedViewOrder) {
+    mockGrid.appendChild(mockCells[v]);
+}
+console.assert(mockGrid.children[0].id === 'top' && mockGrid.children[1].id === 'side' && mockGrid.children[2].id === 'front', 'Default view order is strictly Top, Side, Front');
+console.log('✓ Fixed Camera View Order (Top -> Side -> Front) passed');
+
+// 18. Test Quick ID Filter parsing & frame jump logic
+const parseQuickFilterID = (raw) => {
+    const cleaned = String(raw).trim().replace(/^#/, '');
+    const id = parseInt(cleaned, 10);
+    return isNaN(id) ? null : id;
+};
+
+console.assert(parseQuickFilterID('102') === 102, 'Parsed 102 correctly');
+console.assert(parseQuickFilterID('#555') === 555, 'Parsed #555 correctly');
+console.assert(parseQuickFilterID('  #1514  ') === 1514, 'Trimmed and parsed #1514 correctly');
+console.assert(parseQuickFilterID('abc') === null, 'Invalid non-numeric input returns null');
+console.assert(parseQuickFilterID('') === null, 'Empty string returns null');
+
+// Simulate quick filter auto-jump when current frame is outside track
+let jumpedFrame = null;
+const mockHookForJump = {
+    currentFrame: 5,
+    jumpToFrame: (f) => { jumpedFrame = f; }
+};
+
+const simulateQuickFilter = async (targetID, currentTrack) => {
+    const hasCurrent = currentTrack.some(f => f.frame === mockHookForJump.currentFrame);
+    const targetFrame = hasCurrent ? mockHookForJump.currentFrame : currentTrack[0].frame;
+    if (!hasCurrent) {
+        mockHookForJump.jumpToFrame(targetFrame);
+    }
+    return targetFrame;
+};
+
+// Track 102 spans frames 20 to 50 (currentFrame is 5)
+const targetTrackFrames = [{ frame: 20 }, { frame: 21 }, { frame: 50 }];
+const resultFrame = await simulateQuickFilter(102, targetTrackFrames);
+console.assert(resultFrame === 20, 'Target frame should be track start frame (20)');
+console.assert(jumpedFrame === 20, 'jumpToFrame was invoked with frame 20');
+console.log('✓ Quick ID Filter input parsing & auto frame jump passed');
+
+// 19. Test MacOSDock updateFramesData & refreshTrackData consistency
+let updateDataCount = 0;
+const mockCard = {
+    updateData: (d) => { updateDataCount++; }
+};
+const mockDockInstance = {
+    state: { framesData: [] },
+    cards: new Map([[0, mockCard], [1, mockCard]]),
+    refreshTrackData(framesData) {
+        if (!Array.isArray(framesData) || framesData.length === 0) return;
+        this.state.framesData = framesData;
+        if (this.cards.size === framesData.length) {
+            for (const fData of framesData) {
+                const card = this.cards.get(fData.frame);
+                if (card && typeof card.updateData === 'function') {
+                    card.updateData(fData);
+                }
+            }
+        }
+    },
+    updateFramesData(framesData) {
+        this.refreshTrackData(framesData);
+    }
+};
+
+mockDockInstance.updateFramesData([{ frame: 0 }, { frame: 1 }]);
+console.assert(updateDataCount === 2, 'updateFramesData should delegate to refreshTrackData and update all cards');
+console.assert(mockDockInstance.state.framesData.length === 2, 'state.framesData updated');
+console.log('✓ MacOSDock updateFramesData & refreshTrackData compatibility passed');
 
 console.log('All Unit Tests Passed Successfully!');

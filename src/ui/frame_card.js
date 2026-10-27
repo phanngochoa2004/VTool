@@ -17,8 +17,9 @@ export class FrameCard {
      * @param {Function} [onPasteSizeToAll] - callback when user chooses to paste size to all frames
      * @param {Function} [onToggleOutside] - callback when outside is toggled (frame, outside)
      * @param {Function} [onHover] - callback when mouse enters/leaves card (frame, isHovered)
+     * @param {Object} [options] - additional configuration options (e.g. viewOrder)
      */
-    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover) {
+    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover, options = {}) {
         this.data = data;
         this.frame = data.frame;
         this.onSelectFrame = onSelectFrame;
@@ -26,12 +27,19 @@ export class FrameCard {
         this.onPasteSizeToAll = onPasteSizeToAll;
         this.onToggleOutside = onToggleOutside;
         this.onHover = onHover;
+        this.options = options || {};
+
+        // Camera order: fixed default 'top,side,front'
+        this.viewOrder = Array.isArray(this.options.viewOrder) && this.options.viewOrder.length === 3
+            ? [...this.options.viewOrder]
+            : ['top', 'side', 'front'];
 
         // Keep deep copy of original state for reset capability
         this.originalBox = { ...(data.box || {}) };
         this.originalPoints = Array.isArray(data.points) ? [...data.points] : [];
 
         this.canvases = {};
+        this.cells = {};
         this.lastPointCloudData = null;
         this.lastRenderOptions = null;
         this.isCurrent = false;
@@ -74,12 +82,12 @@ export class FrameCard {
         frameSpan.textContent = `Frame ${this.frame}`;
         title.appendChild(frameSpan);
 
-        if (this.data.keyframe) {
-            const kfBadge = document.createElement('span');
-            kfBadge.className = 'cvat-qaqc-keyframe-badge';
-            kfBadge.textContent = 'Keyframe';
-            title.appendChild(kfBadge);
-        }
+        const kfBadge = document.createElement('span');
+        kfBadge.className = 'cvat-qaqc-keyframe-badge';
+        kfBadge.textContent = 'Keyframe';
+        kfBadge.style.display = this.data.keyframe ? 'inline-block' : 'none';
+        this.kfBadge = kfBadge;
+        title.appendChild(kfBadge);
 
         const currentBadge = document.createElement('span');
         currentBadge.className = 'cvat-qaqc-current-badge';
@@ -172,20 +180,27 @@ export class FrameCard {
             this.triggerJump();
         });
 
-        // 2. Views Grid: CVAT standard order: Top, Side, Front
+        // 2. Views Grid: Configurable order (default: Top, Front, Side)
         const grid = document.createElement('div');
         grid.className = 'cvat-qaqc-views-grid';
         this.grid = grid;
 
-        const views = [
-            { id: 'top', label: 'Top' },
-            { id: 'side', label: 'Side' },
-            { id: 'front', label: 'Front' }
-        ];
+        const viewDefinitions = {
+            top: { id: 'top', label: 'Top' },
+            front: { id: 'front', label: 'Front' },
+            side: { id: 'side', label: 'Side' }
+        };
 
-        for (const { id: viewType, label } of views) {
+        const activeOrder = Array.isArray(this.viewOrder) && this.viewOrder.length === 3
+            ? this.viewOrder
+            : ['top', 'side', 'front'];
+
+        for (const viewType of activeOrder) {
+            const def = viewDefinitions[viewType] || { id: viewType, label: viewType.toUpperCase() };
+            const label = def.label;
             const cell = document.createElement('div');
             cell.className = `cvat-qaqc-view-cell cell-${viewType}`;
+            this.cells[viewType] = cell;
 
             // CVAT-style Header Strip for each view with integrated rotation buttons
             const cellHeader = document.createElement('div');
@@ -230,6 +245,21 @@ export class FrameCard {
     }
 
     /**
+     * Reorder view cells without destroying DOM or canvases
+     * @param {Array<string>} orderArray
+     */
+    setViewOrder(orderArray) {
+        if (!this.grid || !this.cells || !Array.isArray(orderArray)) return;
+        this.viewOrder = [...orderArray];
+        for (const viewType of orderArray) {
+            const cell = this.cells[viewType];
+            if (cell) {
+                this.grid.appendChild(cell);
+            }
+        }
+    }
+
+    /**
      * Rotate cuboid in specific projection view
      * @param {'top'|'side'|'front'} viewType
      * @param {number} deltaRad - angle increment in radians
@@ -238,9 +268,9 @@ export class FrameCard {
         if (!this.data.box || this.data.outside) return;
 
         // Top: Yaw (rz, around Z)
-        // Side: Pitch (rx, around X)
-        // Front: Roll (ry, around Y)
-        const propKey = viewType === 'top' ? 'rz' : (viewType === 'side' ? 'rx' : 'ry');
+        // Front: Roll (rx, around X)
+        // Side: Pitch (ry, around Y)
+        const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
         const current = typeof this.data.box[propKey] === 'number' ? this.data.box[propKey] : 0;
         let nextVal = current + deltaRad;
 
@@ -262,7 +292,7 @@ export class FrameCard {
     createRotateGroup(viewType = 'top', onRotate) {
         const group = document.createElement('div');
         group.className = 'cvat-qaqc-rot-group';
-        const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'side' ? 'Pitch' : 'Roll');
+        const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'front' ? 'Roll' : 'Pitch');
         group.title = `Xoay góc ${axisName}`;
 
         const isTop = viewType === 'top';
@@ -293,6 +323,7 @@ export class FrameCard {
 
     applyBoxChanges() {
         this.data.points = TrackReader.boxToPoints(this.data.box, this.data.points);
+        this.data.keyframe = true; // Editing an interpolated frame promotes it to a keyframe
 
         if (this.lastPointCloudData && this.lastRenderOptions) {
             this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
@@ -460,6 +491,10 @@ export class FrameCard {
 
         const isOutside = !!this.data.outside;
 
+        if (this.kfBadge) {
+            this.kfBadge.style.display = this.data.keyframe ? 'inline-block' : 'none';
+        }
+
         if (this.outsideBadge) {
             this.outsideBadge.style.display = isOutside ? 'inline-block' : 'none';
         }
@@ -496,10 +531,10 @@ export class FrameCard {
                 this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(box.rz ?? 0);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
+                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
+                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
             }
         }
 
@@ -662,11 +697,11 @@ export class FrameCard {
                 if (viewType === 'top') {
                     d_lx = d_h;
                     d_ly = d_v;
-                } else if (viewType === 'side') {
+                } else if (viewType === 'front') {
                     d_ly = d_h;
                     d_lz = d_v;
-                } else if (viewType === 'front') {
-                    d_lx = d_h;
+                } else if (viewType === 'side') {
+                    d_lx = -d_h;
                     d_lz = d_v;
                 }
 
@@ -711,13 +746,13 @@ export class FrameCard {
                     d_ly = v_mid;
                     nextSx = newDimH;
                     nextSy = newDimV;
-                } else if (viewType === 'side') {
+                } else if (viewType === 'front') {
                     d_ly = u_mid;
                     d_lz = v_mid;
                     nextSy = newDimH;
                     nextSz = newDimV;
-                } else if (viewType === 'front') {
-                    d_lx = u_mid;
+                } else if (viewType === 'side') {
+                    d_lx = -u_mid;
                     d_lz = v_mid;
                     nextSx = newDimH;
                     nextSz = newDimV;
@@ -744,9 +779,9 @@ export class FrameCard {
                 if (action === 'resize-left' || action === 'resize-right') {
                     const sign = action === 'resize-right' ? 1 : -1;
                     const deltaM = (dxPx / scale) * sign;
-                    if (viewType === 'top' || viewType === 'front') {
+                    if (viewType === 'top' || viewType === 'side') {
                         this.data.box.sx = Math.max(0.15, parseFloat(((this.data.box.sx || 1) + deltaM).toFixed(3)));
-                    } else if (viewType === 'side') {
+                    } else if (viewType === 'front') {
                         this.data.box.sy = Math.max(0.15, parseFloat(((this.data.box.sy || 1) + deltaM).toFixed(3)));
                     }
                 } else if (action === 'resize-top' || action === 'resize-bottom') {
@@ -872,6 +907,21 @@ export class FrameCard {
             this.renderViews(this.lastPointCloudData, this.isCurrent, opts);
             this.updateHeaderBadges();
         });
+    }
+
+    /**
+     * Fast toggle of active frame border and badge without expensive canvas re-render
+     * @param {boolean} isCurrentFrame
+     */
+    setActive(isCurrentFrame) {
+        this.isCurrent = !!isCurrentFrame;
+        if (isCurrentFrame) {
+            this.dom.classList.add('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'inline-block';
+        } else {
+            this.dom.classList.remove('active-frame');
+            if (this.currentBadge) this.currentBadge.style.display = 'none';
+        }
     }
 
     /**

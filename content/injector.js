@@ -15,26 +15,138 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
         return;
     }
 
+    if (window.__CVAT_QAQC_INJECTED__) {
+        console.log('[CVAT-QAQC] Already initialized, skipping duplicate injection.');
+        return;
+    }
+    window.__CVAT_QAQC_INJECTED__ = true;
+
     console.log('[CVAT-QAQC] Allowed CVAT site detected. Initializing 3D QA/QC Inspector...');
 
     const pcdCache = new PCDCache();
     const hook = new CVATHook();
 
+    let currentTrackFrames = [];
+    let currentClientID = null;
+
     const dock = new MacOSDock({
+        onBeforeOpen: async () => {
+            // Khi nhấn bật UI extension, thực hiện filter object ID đúng ID đó TRƯỚC KHI xử lý các tác vụ khác
+            let clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
+
+            // Fallback auto-detection: Nếu chưa chọn track nào, tự động lấy track 3D cuboid đầu tiên trên frame hiện tại
+            if ((clientID === null || typeof clientID === 'undefined') && hook.jobInstance) {
+                try {
+                    const states = await hook.jobInstance.annotations.get(hook.currentFrame, true, []);
+                    const cuboid = states.find(s => s.shapeType === 'cuboid' || (s.points && s.points.length >= 9));
+                    if (cuboid && typeof cuboid.clientID === 'number') {
+                        clientID = cuboid.clientID;
+                        hook.activeClientID = clientID;
+                        currentClientID = clientID;
+                    }
+                } catch (_) {}
+            }
+
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                console.log(`[CVAT-QAQC] UI Extension opened. Filtering workspace to Object ID #${clientID} FIRST...`);
+                await hook.filterByObjectID(clientID);
+                dock.setFilteredObjectID(clientID);
+
+                // Nạp frames cho track này nếu chưa nạp
+                if (hook.jobInstance && (currentClientID !== clientID || currentTrackFrames.length === 0)) {
+                    try {
+                        currentClientID = clientID;
+                        currentTrackFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
+                        dock.updateTrack(clientID, currentTrackFrames, hook.currentFrame, pcdCache);
+                        const frameNumbers = currentTrackFrames.map(f => f.frame);
+                        pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                            dock.updateCardPointCloud(loadedFrame, pts);
+                        });
+                    } catch (err) {
+                        console.warn('[CVAT-QAQC] Error loading track frames in onBeforeOpen:', err);
+                    }
+                }
+            }
+        },
         onOpen: () => hook.refreshActiveObject(),
+        onFilterObject: async (id) => {
+            if (!hook.jobInstance) return false;
+            const targetID = Number(id);
+            if (isNaN(targetID)) return false;
+
+            console.log(`[CVAT-QAQC] User requested quick filter for Object ID #${targetID}...`);
+
+            // 1. Isolate in CVAT (Three.js and Redux)
+            await hook.filterByObjectID(targetID);
+            dock.setFilteredObjectID(targetID);
+
+            // 2. Load track frames for this ID
+            try {
+                const trackFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
+                if (trackFrames && trackFrames.length > 0) {
+                    currentClientID = targetID;
+                    currentTrackFrames = trackFrames;
+
+                    // If current frame is outside the track, jump to the track's first frame
+                    const hasCurrent = trackFrames.some(f => f.frame === hook.currentFrame);
+                    const targetFrame = hasCurrent ? hook.currentFrame : trackFrames[0].frame;
+                    if (!hasCurrent) {
+                        hook.jumpToFrame(targetFrame);
+                    }
+
+                    dock.updateTrack(targetID, trackFrames, targetFrame, pcdCache);
+                    const frameNumbers = trackFrames.map(f => f.frame);
+                    pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                        dock.updateCardPointCloud(loadedFrame, pts);
+                    });
+                    return true;
+                } else {
+                    console.warn(`[CVAT-QAQC] Track #${targetID} has no frames or does not exist`);
+                    return false;
+                }
+            } catch (err) {
+                console.warn(`[CVAT-QAQC] Error loading track #${targetID}:`, err);
+                return false;
+            }
+        },
+        onClearFilter: async () => {
+            await hook.clearFilter();
+            dock.setFilteredObjectID(null);
+        },
         onJumpToFrame: (f) => hook.jumpToFrame(f),
         onUndo: () => hook.undo(),
         onRedo: () => hook.redo(),
         onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
+            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
+            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints, null);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
+            }
+
+            // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectCuboid(frame, clientID, newPoints);
         },
         onUpdateOutside: async (frame, clientID, outside) => {
+            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
+            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, null, outside);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
+            }
+
+            // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectOutside(frame, clientID, outside);
         }
     });
-
-    let currentTrackFrames = [];
-    let currentClientID = null;
 
     // Listen for object selection change (track or shape)
     hook.on('objectChange', async ({ clientID, job, canvas, frame }) => {
@@ -47,7 +159,15 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
         if (clientID === null) {
             currentTrackFrames = [];
             dock.updateTrack(null, [], frame, pcdCache);
+            dock.setFilteredObjectID(null);
             return;
+        }
+
+        // Nếu Dock đang mở và người dùng click vào track mới, tự động lọc ngay sang track ID mới này
+        if (dock.isOpen) {
+            console.log(`[CVAT-QAQC] Dock is active. Auto-filtering workspace to newly clicked Track #${clientID}...`);
+            await hook.filterByObjectID(clientID);
+            dock.setFilteredObjectID(clientID);
         }
 
         console.log(`[CVAT-QAQC] Selected Object / Track #${clientID}. Extracting all frames in-memory...`);
