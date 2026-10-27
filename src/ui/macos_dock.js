@@ -315,12 +315,6 @@ export class MacOSDock {
             this.refreshAllCards();
         });
 
-        // Rotate Buttons Group (Active Frame)
-        // const rotGroup = document.createElement('div');
-        // rotGroup.className = 'cvat-qaqc-rot-group';
-        // this.rotGroup = rotGroup;
-        // this.updateToolbarRotateButtons();
-
         // Copy Size Button (Active Frame / Cuboid)
         const copySizeBtn = document.createElement('button');
         copySizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-copy-size-btn';
@@ -362,7 +356,6 @@ export class MacOSDock {
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
-        rightGroup.appendChild(rotGroup);
         rightGroup.appendChild(copySizeBtn);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(hideBtn);
@@ -397,43 +390,7 @@ export class MacOSDock {
     }
 
     updateToolbarRotateButtons() {
-        if (!this.rotGroup) return;
-        this.rotGroup.replaceChildren();
-
-        const mode = this.state.viewMode;
-        const targetView = (mode === 'side' || mode === 'front') ? mode : 'top';
-        const axisName = targetView === 'top' ? 'Yaw (Trục Z)' : (targetView === 'front' ? 'Roll (Trục X)' : 'Pitch (Trục Y)');
-        const isTop = targetView === 'top';
-        const stepDeg = isTop ? 5 : 1;
-        const stepRad = stepDeg * Math.PI / 180;
-
-        this.rotGroup.title = `Xoay góc ${axisName} (Frame đang chọn)`;
-
-        const buttons = [
-            { label: '↺ 90°', delta: -Math.PI / 2, title: `Xoay -90° (${axisName} - Active Frame)` },
-            { label: `↺ ${stepDeg}°`, delta: -stepRad, title: `Xoay -${stepDeg}° (${axisName} - Active Frame)` },
-            { label: `↻ ${stepDeg}°`, delta: stepRad,  title: `Xoay +${stepDeg}° (${axisName} - Active Frame)` },
-            { label: '↻ 90°', delta: Math.PI / 2,  title: `Xoay +90° (${axisName} - Active Frame)` }
-        ];
-
-        buttons.forEach(({ label, delta, title }) => {
-            const btn = document.createElement('button');
-            btn.className = 'cvat-qaqc-rot-btn';
-            btn.textContent = label;
-            btn.title = title;
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
-                if (activeCard) {
-                    if (typeof activeCard.rotateView === 'function') {
-                        activeCard.rotateView(targetView, delta);
-                    } else if (typeof activeCard.rotateBy === 'function') {
-                        activeCard.rotateBy(delta);
-                    }
-                }
-            });
-            this.rotGroup.appendChild(btn);
-        });
+        // Toolbar rotate buttons removed per user preference; each card retains its own rotation controls
     }
 
     setupKeyboardShortcuts() {
