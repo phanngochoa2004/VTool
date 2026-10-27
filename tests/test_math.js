@@ -286,4 +286,51 @@ console.assert(Math.abs(Math.abs(multiAxisBox.rx) - (Math.PI - 1 * Math.PI / 180
 
 console.log('✓ 3-Axis rotation (Top/Yaw, Side/Pitch, Front/Roll) passed');
 
+// 12. Test Outside frame retention and CVATHook.updateObjectOutside
+const mockTrackStates = {
+    0: [{ clientID: 101, points: [1, 2, 3, 0, 0, 0, 2, 4, 1.5], outside: false, keyframe: true, keyframes: { first: 0, last: 2 } }],
+    1: [{ clientID: 101, points: [1, 2, 3, 0, 0, 0, 2, 4, 1.5], outside: true,  keyframe: true, keyframes: { first: 0, last: 2 } }],
+    2: [{ clientID: 101, points: [1, 2, 3, 0, 0, 0, 2, 4, 1.5], outside: true,  keyframe: true, keyframes: { first: 0, last: 2 } }],
+    3: [{ clientID: 101, points: [1, 2, 3, 0, 0, 0, 2, 4, 1.5], outside: true,  keyframe: false, keyframes: { first: 0, last: 2 } }] // After track end
+};
+
+const mockJobForOutside = {
+    startFrame: 0,
+    stopFrame: 3,
+    annotations: {
+        get: async (f) => mockTrackStates[f] || []
+    }
+};
+
+const trackResults = await TrackReader.getTrackFrames(101, mockJobForOutside);
+console.assert(trackResults.length === 3, `Expected 3 frames (0, 1, 2), got ${trackResults.length}`);
+console.assert(trackResults[0].outside === false, 'Frame 0 is inside');
+console.assert(trackResults[1].outside === true, 'Frame 1 is outside and RETAINED in filmstrip');
+console.assert(trackResults[2].outside === true, 'Frame 2 is outside and RETAINED in filmstrip');
+console.log('✓ TrackReader outside frame retention within lifespan passed');
+
+// Test CVATHook.updateObjectOutside
+let saveCalled = false;
+let updatedStateOutside = null;
+const mockTargetState = {
+    clientID: 101,
+    outside: false,
+    save: async () => { saveCalled = true; updatedStateOutside = mockTargetState.outside; }
+};
+
+hook.jobInstance = {
+    annotations: {
+        get: async () => [mockTargetState]
+    },
+    actions: {
+        get: async () => ({})
+    }
+};
+
+const outsideUpdated = await hook.updateObjectOutside(1, 101, true);
+console.assert(outsideUpdated === true, 'updateObjectOutside returned true');
+console.assert(saveCalled === true, 'targetState.save() was called');
+console.assert(updatedStateOutside === true, 'targetState.outside was updated to true');
+console.log('✓ CVATHook.updateObjectOutside in-memory persistence passed');
+
 console.log('All Unit Tests Passed Successfully!');

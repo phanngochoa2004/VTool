@@ -389,6 +389,59 @@
   border: 1px solid rgba(48, 209, 88, 0.35);
 }
 
+.cvat-qaqc-outside-badge {
+  font-size: 9px;
+  font-weight: 600;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: rgba(255, 69, 58, 0.2);
+  color: var(--macos-red);
+  border: 1px solid rgba(255, 69, 58, 0.35);
+  cursor: pointer;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  transition: all 0.12s ease;
+}
+
+.cvat-qaqc-outside-badge:hover {
+  background: rgba(255, 69, 58, 0.35);
+  color: #FFFFFF;
+}
+
+.cvat-qaqc-card.is-outside {
+  border-color: rgba(255, 69, 58, 0.25);
+  background: rgba(26, 16, 16, 0.7);
+}
+
+.cvat-qaqc-card.is-outside:hover {
+  border-color: rgba(255, 69, 58, 0.5);
+}
+
+.cvat-qaqc-card.is-outside .cvat-qaqc-cell-header {
+  background: rgba(35, 18, 18, 0.95);
+}
+
+.cvat-qaqc-card.is-outside .cvat-qaqc-cell-angle {
+  color: var(--macos-text-muted);
+  opacity: 0.5;
+}
+
+.cvat-qaqc-card.is-outside .cvat-qaqc-rot-group {
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+.cvat-qaqc-outside-toggle-btn.active-outside {
+  background: rgba(255, 69, 58, 0.22);
+  border-color: rgba(255, 69, 58, 0.45);
+  color: #FF453A;
+}
+
+.cvat-qaqc-outside-toggle-btn.active-outside:hover {
+  background: rgba(255, 69, 58, 0.35);
+  color: #FFFFFF;
+}
+
 .cvat-qaqc-yaw-badge {
   font-size: 10px;
   font-weight: 600;

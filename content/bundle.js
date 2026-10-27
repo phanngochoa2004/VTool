@@ -420,6 +420,33 @@ class OrthoCanvasRenderer {
             }
         }
 
+        // If cuboid is marked OUTSIDE on this frame:
+        // Keep the frame, background, crosshairs, and point cloud points, but DO NOT render the 3D box or controls.
+        if (options.outside) {
+            // Subtle centered OUTSIDE watermark
+            ctx.save();
+            ctx.font = '600 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.4)';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('OUTSIDE', centerX, centerY);
+            ctx.restore();
+
+            // Bottom-Left Status
+            ctx.font = '600 9.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.75)';
+            ctx.fillText('[ OUTSIDE ]', 6, height - 5);
+
+            // Points Count (Bottom Right)
+            const ptsText = renderedPointsCount > 0 ? `${renderedPointsCount} pts` : '0 pts';
+            ctx.fillStyle = renderedPointsCount > 0 ? 'rgba(48, 209, 88, 0.85)' : 'rgba(255, 159, 10, 0.7)';
+            const ptsMetrics = ctx.measureText(ptsText);
+            ctx.fillText(ptsText, width - ptsMetrics.width - 6, height - 5);
+
+            ctx.restore();
+            return;
+        }
+
         // 4. Render Bounding Box Fill & Border
         ctx.fillStyle = isActivelyTranslating ? 'rgba(10, 132, 255, 0.16)' : 'rgba(24, 75, 140, 0.16)';
         ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
@@ -925,11 +952,19 @@ class TrackReader {
         } catch (_) {}
 
         if (directTrack && typeof directTrack.get === 'function') {
-            // Fastest path: query the Track object directly across all frames
-            for (let f = startFrame; f <= stopFrame; f++) {
+            // Determine track lifetime bounds from keyframes
+            const keyframeNums = Object.keys(directTrack.shapes || {}).map(Number).sort((a, b) => a - b);
+            const trackStart = keyframeNums.length > 0 ? keyframeNums[0] : startFrame;
+            const lastKey = keyframeNums.length > 0 ? keyframeNums[keyframeNums.length - 1] : stopFrame;
+            const isLastOutside = !!directTrack.shapes?.[lastKey]?.outside;
+            const trackEnd = isLastOutside ? lastKey : stopFrame;
+
+            // Query the Track object directly across its active frame range
+            for (let f = trackStart; f <= trackEnd; f++) {
                 try {
                     const data = directTrack.get(f);
-                    if (data && !data.outside && data.points && data.points.length >= 9) {
+                    // Include both inside AND outside frames (outside frames will not draw box on canvas)
+                    if (data && data.points && data.points.length >= 9) {
                         results.push({
                             frame: f,
                             points: [...data.points],
@@ -954,7 +989,14 @@ class TrackReader {
                     const states = await jobInstance.annotations.get(frameNum, true, []);
                     if (!Array.isArray(states)) return null;
                     const state = states.find(s => s.clientID === clientID);
-                    if (state && !state.outside && state.points && state.points.length >= 9) {
+                    if (state && state.points && state.points.length >= 9) {
+                        const first = state.keyframes?.first;
+                        const last = state.keyframes?.last;
+                        // Exclude frames before track was created
+                        if (typeof first === 'number' && frameNum < first) return null;
+                        // Exclude frames after track ended with an outside keyframe
+                        if (typeof last === 'number' && frameNum > last && state.outside) return null;
+
                         return {
                             frame: frameNum,
                             points: [...state.points],
@@ -1059,6 +1101,22 @@ class CVATHook {
      */
     async init() {
         return new Promise((resolve) => {
+            // First check if this page is likely a CVAT application
+            if (typeof document !== 'undefined') {
+                const isLikelyCVAT = typeof window.cvat !== 'undefined' ||
+                    document.title?.includes('CVAT') ||
+                    document.title?.includes('Computer Vision Annotation Tool') ||
+                    !!document.getElementById('layout-grid') ||
+                    !!document.querySelector('.cvat-app, [class*="cvat-"]') ||
+                    /\/(tasks|jobs|projects|cloudstorages)(\/|$)/.test(window.location?.pathname || '');
+
+                if (!isLikelyCVAT) {
+                    // Quick abort for non-CVAT websites sharing localhost or 127.0.0.1
+                    resolve(false);
+                    return;
+                }
+            }
+
             const checkInterval = setInterval(() => {
                 const store = this.findReduxStore();
                 if (store) {
@@ -1071,14 +1129,14 @@ class CVATHook {
                 }
             }, 500);
 
-            // Timeout after 30s if not found
+            // Timeout after 15s if not found (info log rather than warn so Chrome won't flag as extension error)
             setTimeout(() => {
                 clearInterval(checkInterval);
                 if (!this.isHooked) {
-                    console.warn('[CVAT-QAQC] Could not hook into CVAT store within 30s');
+                    console.info('[CVAT-QAQC] CVAT store hook standby (waiting for job session)');
                     resolve(false);
                 }
-            }, 30000);
+            }, 15000);
         });
     }
 
@@ -1398,6 +1456,80 @@ class CVATHook {
             return true;
         } catch (err) {
             console.error('[CVAT-QAQC] Failed to update in-memory cuboid:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Update in-memory outside flag for a cuboid/track at a specific frame
+     * @param {number} frameNumber
+     * @param {number} clientID
+     * @param {boolean} outside
+     * @returns {Promise<boolean>}
+     */
+    async updateObjectOutside(frameNumber, clientID, outside) {
+        if (!this.jobInstance || clientID === null || typeof clientID === 'undefined') {
+            console.warn('[CVAT-QAQC] Cannot update outside: Job instance or clientID missing');
+            return false;
+        }
+
+        try {
+            // 1. Fetch in-memory ObjectStates for this frame
+            const states = await this.jobInstance.annotations.get(frameNumber, true, []);
+            if (!Array.isArray(states)) return false;
+
+            const targetState = states.find(s => s.clientID === clientID);
+            if (!targetState) {
+                console.warn(`[CVAT-QAQC] Object #${clientID} not found on frame #${frameNumber}`);
+                return false;
+            }
+
+            // 2. Set outside flag and save (registers CHANGED_OUTSIDE into CVAT history)
+            targetState.outside = !!outside;
+            await targetState.save();
+            console.log(`[CVAT-QAQC] In-memory outside set to ${outside} for Object #${clientID} at frame #${frameNumber}`);
+
+            // 3. Sync to CVAT Redux store so CVAT top-bar, timeline and history stack register the change
+            if (this.store && this.jobInstance?.actions) {
+                try {
+                    const history = await this.jobInstance.actions.get();
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: {
+                            states: freshStates,
+                            history
+                        }
+                    });
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] Could not sync history to Redux:', e);
+                }
+            }
+
+            // 4. If this is the active frame in CVAT's main viewport, notify canvas
+            if (frameNumber === this.currentFrame && this.canvasInstance) {
+                const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
+                const perspective = canvasDOM?.perspective;
+                if (perspective) {
+                    perspective.dispatchEvent(new CustomEvent('canvas.edited', {
+                        bubbles: false,
+                        cancelable: true,
+                        detail: {
+                            state: targetState
+                        }
+                    }));
+                }
+            }
+
+            this.emit('objectOutsideChanged', {
+                clientID,
+                frame: frameNumber,
+                outside: !!outside
+            });
+
+            return true;
+        } catch (err) {
+            console.error('[CVAT-QAQC] Failed to update in-memory outside:', err);
             return false;
         }
     }
@@ -1775,13 +1907,17 @@ class FrameCard {
      * @param {Function} onSelectFrame - callback when clicked to jump
      * @param {Function} [onUpdateCuboid] - callback when user edits cuboid (frame, newPoints, newBox)
      * @param {Function} [onPasteSizeToAll] - callback when user chooses to paste size to all frames
+     * @param {Function} [onToggleOutside] - callback when outside is toggled (frame, outside)
+     * @param {Function} [onHover] - callback when mouse enters/leaves card (frame, isHovered)
      */
-    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll) {
+    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover) {
         this.data = data;
         this.frame = data.frame;
         this.onSelectFrame = onSelectFrame;
         this.onUpdateCuboid = onUpdateCuboid;
         this.onPasteSizeToAll = onPasteSizeToAll;
+        this.onToggleOutside = onToggleOutside;
+        this.onHover = onHover;
 
         // Keep deep copy of original state for reset capability
         this.originalBox = { ...(data.box || {}) };
@@ -1805,6 +1941,17 @@ class FrameCard {
         const card = document.createElement('div');
         card.className = 'cvat-qaqc-card';
         card.dataset.frame = String(this.frame);
+
+        card.addEventListener('mouseenter', () => {
+            if (typeof this.onHover === 'function') {
+                this.onHover(this.frame, true);
+            }
+        });
+        card.addEventListener('mouseleave', () => {
+            if (typeof this.onHover === 'function') {
+                this.onHover(this.frame, false);
+            }
+        });
 
         // 1. Header Bar (Compact 24px)
         const header = document.createElement('div');
@@ -1832,6 +1979,17 @@ class FrameCard {
         currentBadge.textContent = 'Active';
         this.currentBadge = currentBadge;
 
+        // Outside Indicator Badge
+        const outsideBadge = document.createElement('span');
+        outsideBadge.className = 'cvat-qaqc-outside-badge';
+        outsideBadge.textContent = 'Outside';
+        outsideBadge.title = 'Box trên frame này đang bị Outside (không hiển thị box). Bấm để chuyển về Inside (Phím tắt: O)';
+        outsideBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleOutside();
+        });
+        this.outsideBadge = outsideBadge;
+
         // Angle & Dimension Badges
         const yawBadge = document.createElement('span');
         yawBadge.className = 'cvat-qaqc-yaw-badge';
@@ -1845,12 +2003,24 @@ class FrameCard {
 
         leftGroup.appendChild(title);
         leftGroup.appendChild(currentBadge);
+        leftGroup.appendChild(outsideBadge);
         leftGroup.appendChild(yawBadge);
         leftGroup.appendChild(dimBadge);
 
         // Header Actions (Right Group)
         const rightGroup = document.createElement('div');
         rightGroup.className = 'cvat-qaqc-card-right-group';
+
+        // Outside Toggle Button
+        const outsideBtn = document.createElement('button');
+        outsideBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-outside-toggle-btn';
+        outsideBtn.textContent = this.data.outside ? '⚡ Đặt Inside' : '🚫 Outside';
+        outsideBtn.title = 'Bật/tắt trạng thái Outside cho box trên frame này (Phím tắt: O)';
+        outsideBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleOutside();
+        });
+        this.outsideBtn = outsideBtn;
 
         // Copy Size Button (Compact)
         const copyBtn = document.createElement('button');
@@ -1882,6 +2052,7 @@ class FrameCard {
             this.triggerJump();
         });
 
+        rightGroup.appendChild(outsideBtn);
         rightGroup.appendChild(copyBtn);
         rightGroup.appendChild(pasteBtn);
         rightGroup.appendChild(jumpBtn);
@@ -1956,7 +2127,7 @@ class FrameCard {
      * @param {number} deltaRad - angle increment in radians
      */
     rotateView(viewType, deltaRad) {
-        if (!this.data.box) this.data.box = {};
+        if (!this.data.box || this.data.outside) return;
 
         // Top: Yaw (rz, around Z)
         // Side: Pitch (rx, around X)
@@ -2153,9 +2324,54 @@ class FrameCard {
         }
     }
 
+    /**
+     * Toggle outside flag for this frame card
+     */
+    toggleOutside() {
+        this.data.outside = !this.data.outside;
+        this.updateHeaderBadges();
+
+        if (this.lastPointCloudData && this.lastRenderOptions) {
+            this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
+        } else {
+            this.renderViews(null, this.isCurrent, this.lastRenderOptions || {
+                viewMode: 'all',
+                zoom: 1.0,
+                pointSize: 1.0
+            });
+        }
+
+        if (typeof this.onToggleOutside === 'function') {
+            this.onToggleOutside(this.frame, this.data.outside);
+        }
+    }
+
     updateHeaderBadges() {
         const { box } = this.data;
         if (!box) return;
+
+        const isOutside = !!this.data.outside;
+
+        if (this.outsideBadge) {
+            this.outsideBadge.style.display = isOutside ? 'inline-block' : 'none';
+        }
+
+        if (this.outsideBtn) {
+            this.outsideBtn.textContent = isOutside ? '⚡ Đặt Inside' : '🚫 Outside';
+            if (isOutside) {
+                this.outsideBtn.classList.add('active-outside');
+            } else {
+                this.outsideBtn.classList.remove('active-outside');
+            }
+        }
+
+        if (this.dom) {
+            if (isOutside) {
+                this.dom.classList.add('is-outside');
+            } else {
+                this.dom.classList.remove('is-outside');
+            }
+        }
 
         const toDegStr = (rad) => {
             const deg = ((rad * 180 / Math.PI) % 360).toFixed(1);
@@ -2164,24 +2380,24 @@ class FrameCard {
 
         if (this.yawBadge) {
             const rz = box.rz ?? 0;
-            this.yawBadge.textContent = `Yaw: ${toDegStr(rz)}`;
+            this.yawBadge.textContent = isOutside ? 'Yaw: Outside' : `Yaw: ${toDegStr(rz)}`;
         }
 
         if (this.angleDisplays) {
             if (this.angleDisplays.top) {
-                this.angleDisplays.top.textContent = toDegStr(box.rz ?? 0);
+                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(box.rz ?? 0);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = toDegStr(box.rx ?? 0);
+                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = toDegStr(box.ry ?? 0);
+                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
             }
         }
 
         if (this.dimBadge) {
             const { sx = 2, sy = 4, sz = 1.5 } = box;
-            this.dimBadge.textContent = `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
+            this.dimBadge.textContent = isOutside ? '[Outside]' : `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
         }
     }
 
@@ -2218,7 +2434,7 @@ class FrameCard {
         };
 
         const detectActionAtPos = (pos, metrics) => {
-            if (!this.data.box) return null;
+            if (!this.data.box || this.data.outside) return null;
 
             // 1. Heading rotation helper (Top view only - green circle dot on forward stem)
             if (viewType === 'top') {
@@ -2440,7 +2656,7 @@ class FrameCard {
         });
 
         canvas.addEventListener('pointerdown', (e) => {
-            if (e.button !== 0) return; // Only primary mouse button
+            if (e.button !== 0 || this.data.outside) return; // Only primary mouse button and not outside
 
             const pos = getCanvasPos(e);
             const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);
@@ -2595,6 +2811,7 @@ class FrameCard {
             pointSize,
             color,
             marginFactor: 1.35,
+            outside: !!this.data.outside,
             interaction: options.interaction || null
         };
 
@@ -2641,6 +2858,7 @@ class MacOSDock {
             framesData: []
         };
         this.cards = new Map(); // frame -> FrameCard
+        this.hoveredFrame = null; // Track frame currently hovered by user mouse
         this.dom = null;
         this.triggerEl = null;
         this.triggerDot = null;
@@ -2988,6 +3206,19 @@ class MacOSDock {
                 return;
             }
 
+            // Hotkey O to toggle outside directly on the box at hovered or active frame
+            if (!isCtrlOrCmd && !e.altKey && !e.shiftKey) {
+                if (e.code === 'KeyO' || e.key === 'o' || e.key === 'O') {
+                    const targetFrame = this.hoveredFrame !== null ? this.hoveredFrame : this.state.currentFrame;
+                    const targetCard = this.cards.get(targetFrame);
+                    if (targetCard) {
+                        e.preventDefault();
+                        targetCard.toggleOutside();
+                        return;
+                    }
+                }
+            }
+
             // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
             const isCtrlOrCmd = e.ctrlKey || e.metaKey;
             if (isCtrlOrCmd && !e.altKey) {
@@ -3166,6 +3397,14 @@ class MacOSDock {
                 },
                 (sizeObj) => {
                     this.pasteSizeToAllCards(null);
+                },
+                (frame, outside) => {
+                    if (typeof this.callbacks.onUpdateOutside === 'function') {
+                        this.callbacks.onUpdateOutside(frame, this.state.activeClientID, outside);
+                    }
+                },
+                (frame, isHovered) => {
+                    this.hoveredFrame = isHovered ? frame : (this.hoveredFrame === frame ? null : this.hoveredFrame);
                 }
             );
 
@@ -3280,7 +3519,66 @@ class MacOSDock {
 
 
 
+/**
+ * Detect if the current page is genuine CVAT before attaching UI or polling
+ */
+function isCVATPage() {
+    if (typeof window !== 'undefined' && typeof window.cvat !== 'undefined') return true;
+
+    if (typeof document === 'undefined') return false;
+
+    const title = document.title || '';
+    if (title.includes('Computer Vision Annotation Tool') || title.includes('CVAT')) {
+        return true;
+    }
+
+    const meta = document.querySelector('meta[name="description"]');
+    if (meta && meta.content && meta.content.includes('Computer Vision Annotation Tool')) {
+        return true;
+    }
+
+    if (document.getElementById('layout-grid') && document.getElementById('root')) {
+        return true;
+    }
+
+    if (document.querySelector('.cvat-app, [class*="cvat-"]')) {
+        return true;
+    }
+
+    const path = (typeof window !== 'undefined' && window.location.pathname) || '';
+    if (/\/(tasks|jobs|projects|cloudstorages|organization)(\/|$)/.test(path)) {
+        return true;
+    }
+
+    return false;
+}
+
+function ensureCVATPage(timeoutMs = 1500) {
+    if (isCVATPage()) return Promise.resolve(true);
+
+    return new Promise((resolve) => {
+        const startTime = Date.now();
+        const interval = setInterval(() => {
+            if (isCVATPage()) {
+                clearInterval(interval);
+                resolve(true);
+            } else if (Date.now() - startTime >= timeoutMs) {
+                clearInterval(interval);
+                resolve(false);
+            }
+        }, 150);
+    });
+}
+
 (async function initQAQCInspector() {
+    // Check if this tab is genuinely a CVAT page before creating any UI or hooks
+    const isCVAT = await ensureCVATPage(1500);
+    if (!isCVAT) {
+        // Not a CVAT web app (e.g. other local web servers on port 5173, 3000, 8000).
+        // Exit silently without polluting DOM, setting timers, or logging warnings.
+        return;
+    }
+
     console.log('[CVAT-QAQC] Initializing 3D QA/QC Inspector...');
 
     const pcdCache = new PCDCache();
@@ -3293,6 +3591,9 @@ class MacOSDock {
         onRedo: () => hook.redo(),
         onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
             await hook.updateObjectCuboid(frame, clientID, newPoints);
+        },
+        onUpdateOutside: async (frame, clientID, outside) => {
+            await hook.updateObjectOutside(frame, clientID, outside);
         }
     });
 

@@ -15,13 +15,17 @@ export class FrameCard {
      * @param {Function} onSelectFrame - callback when clicked to jump
      * @param {Function} [onUpdateCuboid] - callback when user edits cuboid (frame, newPoints, newBox)
      * @param {Function} [onPasteSizeToAll] - callback when user chooses to paste size to all frames
+     * @param {Function} [onToggleOutside] - callback when outside is toggled (frame, outside)
+     * @param {Function} [onHover] - callback when mouse enters/leaves card (frame, isHovered)
      */
-    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll) {
+    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover) {
         this.data = data;
         this.frame = data.frame;
         this.onSelectFrame = onSelectFrame;
         this.onUpdateCuboid = onUpdateCuboid;
         this.onPasteSizeToAll = onPasteSizeToAll;
+        this.onToggleOutside = onToggleOutside;
+        this.onHover = onHover;
 
         // Keep deep copy of original state for reset capability
         this.originalBox = { ...(data.box || {}) };
@@ -45,6 +49,17 @@ export class FrameCard {
         const card = document.createElement('div');
         card.className = 'cvat-qaqc-card';
         card.dataset.frame = String(this.frame);
+
+        card.addEventListener('mouseenter', () => {
+            if (typeof this.onHover === 'function') {
+                this.onHover(this.frame, true);
+            }
+        });
+        card.addEventListener('mouseleave', () => {
+            if (typeof this.onHover === 'function') {
+                this.onHover(this.frame, false);
+            }
+        });
 
         // 1. Header Bar (Compact 24px)
         const header = document.createElement('div');
@@ -72,6 +87,17 @@ export class FrameCard {
         currentBadge.textContent = 'Active';
         this.currentBadge = currentBadge;
 
+        // Outside Indicator Badge
+        const outsideBadge = document.createElement('span');
+        outsideBadge.className = 'cvat-qaqc-outside-badge';
+        outsideBadge.textContent = 'Outside';
+        outsideBadge.title = 'Box trên frame này đang bị Outside (không hiển thị box). Bấm để chuyển về Inside (Phím tắt: O)';
+        outsideBadge.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleOutside();
+        });
+        this.outsideBadge = outsideBadge;
+
         // Angle & Dimension Badges
         const yawBadge = document.createElement('span');
         yawBadge.className = 'cvat-qaqc-yaw-badge';
@@ -85,12 +111,24 @@ export class FrameCard {
 
         leftGroup.appendChild(title);
         leftGroup.appendChild(currentBadge);
+        leftGroup.appendChild(outsideBadge);
         leftGroup.appendChild(yawBadge);
         leftGroup.appendChild(dimBadge);
 
         // Header Actions (Right Group)
         const rightGroup = document.createElement('div');
         rightGroup.className = 'cvat-qaqc-card-right-group';
+
+        // Outside Toggle Button
+        const outsideBtn = document.createElement('button');
+        outsideBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-outside-toggle-btn';
+        outsideBtn.textContent = this.data.outside ? '⚡ Đặt Inside' : '🚫 Outside';
+        outsideBtn.title = 'Bật/tắt trạng thái Outside cho box trên frame này (Phím tắt: O)';
+        outsideBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.toggleOutside();
+        });
+        this.outsideBtn = outsideBtn;
 
         // Copy Size Button (Compact)
         const copyBtn = document.createElement('button');
@@ -122,6 +160,7 @@ export class FrameCard {
             this.triggerJump();
         });
 
+        rightGroup.appendChild(outsideBtn);
         rightGroup.appendChild(copyBtn);
         rightGroup.appendChild(pasteBtn);
         rightGroup.appendChild(jumpBtn);
@@ -196,7 +235,7 @@ export class FrameCard {
      * @param {number} deltaRad - angle increment in radians
      */
     rotateView(viewType, deltaRad) {
-        if (!this.data.box) this.data.box = {};
+        if (!this.data.box || this.data.outside) return;
 
         // Top: Yaw (rz, around Z)
         // Side: Pitch (rx, around X)
@@ -393,9 +432,54 @@ export class FrameCard {
         }
     }
 
+    /**
+     * Toggle outside flag for this frame card
+     */
+    toggleOutside() {
+        this.data.outside = !this.data.outside;
+        this.updateHeaderBadges();
+
+        if (this.lastPointCloudData && this.lastRenderOptions) {
+            this.renderViews(this.lastPointCloudData, this.isCurrent, this.lastRenderOptions);
+        } else {
+            this.renderViews(null, this.isCurrent, this.lastRenderOptions || {
+                viewMode: 'all',
+                zoom: 1.0,
+                pointSize: 1.0
+            });
+        }
+
+        if (typeof this.onToggleOutside === 'function') {
+            this.onToggleOutside(this.frame, this.data.outside);
+        }
+    }
+
     updateHeaderBadges() {
         const { box } = this.data;
         if (!box) return;
+
+        const isOutside = !!this.data.outside;
+
+        if (this.outsideBadge) {
+            this.outsideBadge.style.display = isOutside ? 'inline-block' : 'none';
+        }
+
+        if (this.outsideBtn) {
+            this.outsideBtn.textContent = isOutside ? '⚡ Đặt Inside' : '🚫 Outside';
+            if (isOutside) {
+                this.outsideBtn.classList.add('active-outside');
+            } else {
+                this.outsideBtn.classList.remove('active-outside');
+            }
+        }
+
+        if (this.dom) {
+            if (isOutside) {
+                this.dom.classList.add('is-outside');
+            } else {
+                this.dom.classList.remove('is-outside');
+            }
+        }
 
         const toDegStr = (rad) => {
             const deg = ((rad * 180 / Math.PI) % 360).toFixed(1);
@@ -404,24 +488,24 @@ export class FrameCard {
 
         if (this.yawBadge) {
             const rz = box.rz ?? 0;
-            this.yawBadge.textContent = `Yaw: ${toDegStr(rz)}`;
+            this.yawBadge.textContent = isOutside ? 'Yaw: Outside' : `Yaw: ${toDegStr(rz)}`;
         }
 
         if (this.angleDisplays) {
             if (this.angleDisplays.top) {
-                this.angleDisplays.top.textContent = toDegStr(box.rz ?? 0);
+                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(box.rz ?? 0);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = toDegStr(box.rx ?? 0);
+                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(box.rx ?? 0);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = toDegStr(box.ry ?? 0);
+                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(box.ry ?? 0);
             }
         }
 
         if (this.dimBadge) {
             const { sx = 2, sy = 4, sz = 1.5 } = box;
-            this.dimBadge.textContent = `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
+            this.dimBadge.textContent = isOutside ? '[Outside]' : `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
         }
     }
 
@@ -458,7 +542,7 @@ export class FrameCard {
         };
 
         const detectActionAtPos = (pos, metrics) => {
-            if (!this.data.box) return null;
+            if (!this.data.box || this.data.outside) return null;
 
             // 1. Heading rotation helper (Top view only - green circle dot on forward stem)
             if (viewType === 'top') {
@@ -680,7 +764,7 @@ export class FrameCard {
         });
 
         canvas.addEventListener('pointerdown', (e) => {
-            if (e.button !== 0) return; // Only primary mouse button
+            if (e.button !== 0 || this.data.outside) return; // Only primary mouse button and not outside
 
             const pos = getCanvasPos(e);
             const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);
@@ -835,6 +919,7 @@ export class FrameCard {
             pointSize,
             color,
             marginFactor: 1.35,
+            outside: !!this.data.outside,
             interaction: options.interaction || null
         };
 

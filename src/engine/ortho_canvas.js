@@ -203,6 +203,33 @@ export class OrthoCanvasRenderer {
             }
         }
 
+        // If cuboid is marked OUTSIDE on this frame:
+        // Keep the frame, background, crosshairs, and point cloud points, but DO NOT render the 3D box or controls.
+        if (options.outside) {
+            // Subtle centered OUTSIDE watermark
+            ctx.save();
+            ctx.font = '600 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.4)';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('OUTSIDE', centerX, centerY);
+            ctx.restore();
+
+            // Bottom-Left Status
+            ctx.font = '600 9.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.75)';
+            ctx.fillText('[ OUTSIDE ]', 6, height - 5);
+
+            // Points Count (Bottom Right)
+            const ptsText = renderedPointsCount > 0 ? `${renderedPointsCount} pts` : '0 pts';
+            ctx.fillStyle = renderedPointsCount > 0 ? 'rgba(48, 209, 88, 0.85)' : 'rgba(255, 159, 10, 0.7)';
+            const ptsMetrics = ctx.measureText(ptsText);
+            ctx.fillText(ptsText, width - ptsMetrics.width - 6, height - 5);
+
+            ctx.restore();
+            return;
+        }
+
         // 4. Render Bounding Box Fill & Border
         ctx.fillStyle = isActivelyTranslating ? 'rgba(10, 132, 255, 0.16)' : 'rgba(24, 75, 140, 0.16)';
         ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);

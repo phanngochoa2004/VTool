@@ -25,6 +25,7 @@ export class MacOSDock {
             framesData: []
         };
         this.cards = new Map(); // frame -> FrameCard
+        this.hoveredFrame = null; // Track frame currently hovered by user mouse
         this.dom = null;
         this.triggerEl = null;
         this.triggerDot = null;
@@ -372,6 +373,19 @@ export class MacOSDock {
                 return;
             }
 
+            // Hotkey O to toggle outside directly on the box at hovered or active frame
+            if (!isCtrlOrCmd && !e.altKey && !e.shiftKey) {
+                if (e.code === 'KeyO' || e.key === 'o' || e.key === 'O') {
+                    const targetFrame = this.hoveredFrame !== null ? this.hoveredFrame : this.state.currentFrame;
+                    const targetCard = this.cards.get(targetFrame);
+                    if (targetCard) {
+                        e.preventDefault();
+                        targetCard.toggleOutside();
+                        return;
+                    }
+                }
+            }
+
             // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
             const isCtrlOrCmd = e.ctrlKey || e.metaKey;
             if (isCtrlOrCmd && !e.altKey) {
@@ -550,6 +564,14 @@ export class MacOSDock {
                 },
                 (sizeObj) => {
                     this.pasteSizeToAllCards(null);
+                },
+                (frame, outside) => {
+                    if (typeof this.callbacks.onUpdateOutside === 'function') {
+                        this.callbacks.onUpdateOutside(frame, this.state.activeClientID, outside);
+                    }
+                },
+                (frame, isHovered) => {
+                    this.hoveredFrame = isHovered ? frame : (this.hoveredFrame === frame ? null : this.hoveredFrame);
                 }
             );
 

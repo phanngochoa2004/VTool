@@ -28,6 +28,22 @@ export class CVATHook {
      */
     async init() {
         return new Promise((resolve) => {
+            // First check if this page is likely a CVAT application
+            if (typeof document !== 'undefined') {
+                const isLikelyCVAT = typeof window.cvat !== 'undefined' ||
+                    document.title?.includes('CVAT') ||
+                    document.title?.includes('Computer Vision Annotation Tool') ||
+                    !!document.getElementById('layout-grid') ||
+                    !!document.querySelector('.cvat-app, [class*="cvat-"]') ||
+                    /\/(tasks|jobs|projects|cloudstorages)(\/|$)/.test(window.location?.pathname || '');
+
+                if (!isLikelyCVAT) {
+                    // Quick abort for non-CVAT websites sharing localhost or 127.0.0.1
+                    resolve(false);
+                    return;
+                }
+            }
+
             const checkInterval = setInterval(() => {
                 const store = this.findReduxStore();
                 if (store) {
@@ -40,14 +56,14 @@ export class CVATHook {
                 }
             }, 500);
 
-            // Timeout after 30s if not found
+            // Timeout after 15s if not found (info log rather than warn so Chrome won't flag as extension error)
             setTimeout(() => {
                 clearInterval(checkInterval);
                 if (!this.isHooked) {
-                    console.warn('[CVAT-QAQC] Could not hook into CVAT store within 30s');
+                    console.info('[CVAT-QAQC] CVAT store hook standby (waiting for job session)');
                     resolve(false);
                 }
-            }, 30000);
+            }, 15000);
         });
     }
 
@@ -367,6 +383,80 @@ export class CVATHook {
             return true;
         } catch (err) {
             console.error('[CVAT-QAQC] Failed to update in-memory cuboid:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Update in-memory outside flag for a cuboid/track at a specific frame
+     * @param {number} frameNumber
+     * @param {number} clientID
+     * @param {boolean} outside
+     * @returns {Promise<boolean>}
+     */
+    async updateObjectOutside(frameNumber, clientID, outside) {
+        if (!this.jobInstance || clientID === null || typeof clientID === 'undefined') {
+            console.warn('[CVAT-QAQC] Cannot update outside: Job instance or clientID missing');
+            return false;
+        }
+
+        try {
+            // 1. Fetch in-memory ObjectStates for this frame
+            const states = await this.jobInstance.annotations.get(frameNumber, true, []);
+            if (!Array.isArray(states)) return false;
+
+            const targetState = states.find(s => s.clientID === clientID);
+            if (!targetState) {
+                console.warn(`[CVAT-QAQC] Object #${clientID} not found on frame #${frameNumber}`);
+                return false;
+            }
+
+            // 2. Set outside flag and save (registers CHANGED_OUTSIDE into CVAT history)
+            targetState.outside = !!outside;
+            await targetState.save();
+            console.log(`[CVAT-QAQC] In-memory outside set to ${outside} for Object #${clientID} at frame #${frameNumber}`);
+
+            // 3. Sync to CVAT Redux store so CVAT top-bar, timeline and history stack register the change
+            if (this.store && this.jobInstance?.actions) {
+                try {
+                    const history = await this.jobInstance.actions.get();
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: {
+                            states: freshStates,
+                            history
+                        }
+                    });
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] Could not sync history to Redux:', e);
+                }
+            }
+
+            // 4. If this is the active frame in CVAT's main viewport, notify canvas
+            if (frameNumber === this.currentFrame && this.canvasInstance) {
+                const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
+                const perspective = canvasDOM?.perspective;
+                if (perspective) {
+                    perspective.dispatchEvent(new CustomEvent('canvas.edited', {
+                        bubbles: false,
+                        cancelable: true,
+                        detail: {
+                            state: targetState
+                        }
+                    }));
+                }
+            }
+
+            this.emit('objectOutsideChanged', {
+                clientID,
+                frame: frameNumber,
+                outside: !!outside
+            });
+
+            return true;
+        } catch (err) {
+            console.error('[CVAT-QAQC] Failed to update in-memory outside:', err);
             return false;
         }
     }

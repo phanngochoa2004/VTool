@@ -34,11 +34,19 @@ export class TrackReader {
         } catch (_) {}
 
         if (directTrack && typeof directTrack.get === 'function') {
-            // Fastest path: query the Track object directly across all frames
-            for (let f = startFrame; f <= stopFrame; f++) {
+            // Determine track lifetime bounds from keyframes
+            const keyframeNums = Object.keys(directTrack.shapes || {}).map(Number).sort((a, b) => a - b);
+            const trackStart = keyframeNums.length > 0 ? keyframeNums[0] : startFrame;
+            const lastKey = keyframeNums.length > 0 ? keyframeNums[keyframeNums.length - 1] : stopFrame;
+            const isLastOutside = !!directTrack.shapes?.[lastKey]?.outside;
+            const trackEnd = isLastOutside ? lastKey : stopFrame;
+
+            // Query the Track object directly across its active frame range
+            for (let f = trackStart; f <= trackEnd; f++) {
                 try {
                     const data = directTrack.get(f);
-                    if (data && !data.outside && data.points && data.points.length >= 9) {
+                    // Include both inside AND outside frames (outside frames will not draw box on canvas)
+                    if (data && data.points && data.points.length >= 9) {
                         results.push({
                             frame: f,
                             points: [...data.points],
@@ -63,7 +71,14 @@ export class TrackReader {
                     const states = await jobInstance.annotations.get(frameNum, true, []);
                     if (!Array.isArray(states)) return null;
                     const state = states.find(s => s.clientID === clientID);
-                    if (state && !state.outside && state.points && state.points.length >= 9) {
+                    if (state && state.points && state.points.length >= 9) {
+                        const first = state.keyframes?.first;
+                        const last = state.keyframes?.last;
+                        // Exclude frames before track was created
+                        if (typeof first === 'number' && frameNum < first) return null;
+                        // Exclude frames after track ended with an outside keyframe
+                        if (typeof last === 'number' && frameNum > last && state.outside) return null;
+
                         return {
                             frame: frameNum,
                             points: [...state.points],
