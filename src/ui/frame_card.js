@@ -268,7 +268,7 @@ export class FrameCard {
      * @param {number} deltaRad - angle increment in radians
      */
     rotateView(viewType, deltaRad) {
-        if (!this.data.box || this.data.outside) return;
+        if (!this.data.box) return;
 
         // Perform authentic 3D local-axis rotation matching Three.js / CVAT canvas3d
         const newAngles = Math3D.rotateLocal(this.data.box, viewType, deltaRad);
@@ -521,25 +521,27 @@ export class FrameCard {
 
         if (this.yawBadge) {
             const rz = box.rz ?? 0;
-            this.yawBadge.textContent = isOutside ? 'Yaw: Outside' : `Yaw: ${toDegStr(rz)}`;
+            this.yawBadge.textContent = isOutside ? `Yaw: ${toDegStr(rz)} (Outside)` : `Yaw: ${toDegStr(rz)}`;
         }
 
         if (this.angleDisplays) {
             const localAngles = Math3D.getLocalAngles(box);
             if (this.angleDisplays.top) {
-                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(localAngles.yaw);
+                this.angleDisplays.top.textContent = toDegStr(localAngles.yaw);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(localAngles.pitch);
+                this.angleDisplays.side.textContent = toDegStr(localAngles.pitch);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(localAngles.roll);
+                this.angleDisplays.front.textContent = toDegStr(localAngles.roll);
             }
         }
 
         if (this.dimBadge) {
             const { sx = 2, sy = 4, sz = 1.5 } = box;
-            this.dimBadge.textContent = isOutside ? '[Outside]' : `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
+            this.dimBadge.textContent = isOutside
+                ? `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m [Outside]`
+                : `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
         }
     }
 
@@ -576,7 +578,7 @@ export class FrameCard {
         };
 
         const detectActionAtPos = (pos, metrics) => {
-            if (!this.data.box || this.data.outside) return null;
+            if (!this.data.box) return null;
 
             // 1. Heading rotation helper (Top view only - green circle dot on forward stem)
             if (viewType === 'top') {
@@ -798,7 +800,7 @@ export class FrameCard {
         });
 
         canvas.addEventListener('pointerdown', (e) => {
-            if (e.button !== 0 || this.data.outside) return; // Only primary mouse button and not outside
+            if (e.button !== 0) return; // Only primary mouse button
 
             const pos = getCanvasPos(e);
             const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);

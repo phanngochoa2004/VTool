@@ -336,6 +336,45 @@ console.assert(saveCalled === true, 'targetState.save() was called');
 console.assert(updatedStateOutside === true, 'targetState.outside was updated to true');
 console.log('✓ CVATHook.updateObjectOutside in-memory persistence passed');
 
+// Test that OrthoCanvasRenderer renders the box when outside is true (with dashed border and outside marking)
+let fillRectCalls = [];
+let strokeRectCalls = [];
+let fillTextCalls = [];
+let setLineDashCalls = [];
+
+const mockCtx = {
+    save: () => {},
+    restore: () => {},
+    scale: () => {},
+    fillRect: (x, y, w, h) => { fillRectCalls.push({ x, y, w, h }); },
+    strokeRect: (x, y, w, h) => { strokeRectCalls.push({ x, y, w, h }); },
+    fillText: (text, x, y) => { fillTextCalls.push({ text, x, y }); },
+    setLineDash: (d) => { setLineDashCalls.push(d); },
+    beginPath: () => {},
+    moveTo: () => {},
+    lineTo: () => {},
+    stroke: () => {},
+    arc: () => {},
+    fill: () => {},
+    closePath: () => {},
+    measureText: () => ({ width: 30 })
+};
+
+const mockCanvasForOutside = {
+    width: 220,
+    height: 110,
+    clientWidth: 220,
+    clientHeight: 110,
+    getContext: () => mockCtx
+};
+
+OrthoCanvasRenderer.render(mockCanvasForOutside, null, testBox, 'top', { outside: true });
+console.assert(fillRectCalls.length >= 2, 'Outside frame still renders background and box fill');
+console.assert(strokeRectCalls.length >= 1, 'Outside frame still renders box outline');
+console.assert(fillTextCalls.some(c => c.text === 'OUTSIDE'), 'Outside watermark text rendered in box');
+console.assert(setLineDashCalls.some(d => d.length > 0), 'Outside box outline uses dashed border');
+console.log('✓ OrthoCanvasRenderer outside box retention & styling passed');
+
 // 13. Test ALLOWED_SITES whitelist verification without regex
 import { isAllowedSite, ALLOWED_SITES } from '../src/config/allowed_sites.js';
 

@@ -203,43 +203,43 @@ export class OrthoCanvasRenderer {
             }
         }
 
-        // If cuboid is marked OUTSIDE on this frame:
-        // Keep the frame, background, crosshairs, and point cloud points, but DO NOT render the 3D box or controls.
-        if (options.outside) {
-            // Subtle centered OUTSIDE watermark
+        const isOutside = !!options.outside;
+
+        // 4. Render Bounding Box Fill & Border
+        if (isOutside) {
+            // Outside Box Styling:
+            // Box position remains fully visible, styled with a dashed red border,
+            // subtle red tint, and an OUTSIDE indicator watermark.
+            ctx.fillStyle = isActivelyTranslating ? 'rgba(255, 69, 58, 0.18)' : 'rgba(255, 69, 58, 0.08)';
+            ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
+
             ctx.save();
-            ctx.font = '600 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
-            ctx.fillStyle = 'rgba(255, 69, 58, 0.4)';
+            ctx.strokeStyle = isActivelyTranslating ? '#FF453A' : 'rgba(255, 69, 58, 0.85)';
+            ctx.lineWidth = isActivelyTranslating ? 2.0 : 1.6;
+            ctx.setLineDash([5, 3]);
+            ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
+            ctx.restore();
+
+            // Centered OUTSIDE watermark badge inside the box
+            ctx.save();
+            ctx.font = '700 10.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.7)';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('OUTSIDE', centerX, centerY);
             ctx.restore();
+        } else {
+            // Normal Inside Box Styling
+            ctx.fillStyle = isActivelyTranslating ? 'rgba(10, 132, 255, 0.16)' : 'rgba(24, 75, 140, 0.16)';
+            ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
 
-            // Bottom-Left Status
-            ctx.font = '600 9.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
-            ctx.fillStyle = 'rgba(255, 69, 58, 0.75)';
-            ctx.fillText('[ OUTSIDE ]', 6, height - 5);
-
-            // Points Count (Bottom Right)
-            const ptsText = renderedPointsCount > 0 ? `${renderedPointsCount} pts` : '0 pts';
-            ctx.fillStyle = renderedPointsCount > 0 ? 'rgba(48, 209, 88, 0.85)' : 'rgba(255, 159, 10, 0.7)';
-            const ptsMetrics = ctx.measureText(ptsText);
-            ctx.fillText(ptsText, width - ptsMetrics.width - 6, height - 5);
-
-            ctx.restore();
-            return;
+            ctx.strokeStyle = isActivelyTranslating ? '#0A84FF' : '#FFFFFF';
+            ctx.lineWidth = isActivelyTranslating ? 2.0 : 1.5;
+            ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
         }
 
-        // 4. Render Bounding Box Fill & Border
-        ctx.fillStyle = isActivelyTranslating ? 'rgba(10, 132, 255, 0.16)' : 'rgba(24, 75, 140, 0.16)';
-        ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
-
-        ctx.strokeStyle = isActivelyTranslating ? '#0A84FF' : '#FFFFFF';
-        ctx.lineWidth = isActivelyTranslating ? 2.0 : 1.5;
-        ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
-
         // Highlight active resizing edge if any (edge-drag fallback)
-        if (activeResizeAction && activeResizeAction !== 'resize-corner') {
+        if (!isOutside && activeResizeAction && activeResizeAction !== 'resize-corner') {
             ctx.strokeStyle = '#0A84FF';
             ctx.lineWidth = 3.5;
             ctx.beginPath();
@@ -262,7 +262,7 @@ export class OrthoCanvasRenderer {
         // Ground reference line for Side and Front views
         if (viewType === 'side' || viewType === 'front') {
             const groundY = boxBottom;
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.strokeStyle = isOutside ? 'rgba(255, 69, 58, 0.35)' : 'rgba(255, 255, 255, 0.25)';
             ctx.lineWidth = 1;
             ctx.setLineDash([2, 2]);
             ctx.beginPath();
@@ -273,6 +273,10 @@ export class OrthoCanvasRenderer {
         }
 
         // 5. CVAT-style Heading & Rotation Helper
+        if (isOutside) {
+            ctx.save();
+            ctx.globalAlpha = 0.55;
+        }
         if (viewType === 'top') {
             this.drawCVATHeadingHelper(
                 ctx,
@@ -304,9 +308,19 @@ export class OrthoCanvasRenderer {
             ctx.stroke();
             this.drawArrow(ctx, boxLeft, centerY, boxLeft - 18, centerY, '#FF3B30', 6, 1.8);
         }
+        if (isOutside) {
+            ctx.restore();
+        }
 
         // 6. CVAT 4 Red Corner Handles (All views)
-        this.drawCornerHandles(ctx, corners, interaction);
+        if (isOutside) {
+            ctx.save();
+            ctx.globalAlpha = 0.5;
+            this.drawCornerHandles(ctx, corners, interaction);
+            ctx.restore();
+        } else {
+            this.drawCornerHandles(ctx, corners, interaction);
+        }
 
         // 7. Interactive HUD Badges
         if (isActivelyRotating) {
@@ -326,7 +340,6 @@ export class OrthoCanvasRenderer {
 
         // 8. Dimension Caption (Bottom Left)
         ctx.font = '500 9.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
         let dimLabel = `${dimH.toFixed(2)}m × ${dimV.toFixed(2)}m`;
         if (viewType === 'top') {
             dimLabel = `W:${sx.toFixed(2)}  L:${sy.toFixed(2)}m`;
@@ -335,7 +348,13 @@ export class OrthoCanvasRenderer {
         } else if (viewType === 'side') {
             dimLabel = `W:${sx.toFixed(2)}  H:${sz.toFixed(2)}m`;
         }
-        ctx.fillText(dimLabel, 6, height - 5);
+        if (isOutside) {
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.9)';
+            ctx.fillText(`${dimLabel} • [OUTSIDE]`, 6, height - 5);
+        } else {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.fillText(dimLabel, 6, height - 5);
+        }
 
         // Points Count (Bottom Right)
         const ptsText = renderedPointsCount > 0 ? `${renderedPointsCount} pts` : '0 pts';

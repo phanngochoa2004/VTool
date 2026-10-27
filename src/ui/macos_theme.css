@@ -564,12 +564,15 @@
 
 .cvat-qaqc-card.is-outside .cvat-qaqc-cell-angle {
   color: var(--macos-text-muted);
-  opacity: 0.5;
+  opacity: 0.8;
 }
 
 .cvat-qaqc-card.is-outside .cvat-qaqc-rot-group {
-  opacity: 0.35;
-  pointer-events: none;
+  opacity: 0.7;
+}
+
+.cvat-qaqc-card.is-outside:hover .cvat-qaqc-rot-group {
+  opacity: 1;
 }
 
 .cvat-qaqc-outside-toggle-btn.active-outside {

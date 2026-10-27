@@ -647,43 +647,43 @@ class OrthoCanvasRenderer {
             }
         }
 
-        // If cuboid is marked OUTSIDE on this frame:
-        // Keep the frame, background, crosshairs, and point cloud points, but DO NOT render the 3D box or controls.
-        if (options.outside) {
-            // Subtle centered OUTSIDE watermark
+        const isOutside = !!options.outside;
+
+        // 4. Render Bounding Box Fill & Border
+        if (isOutside) {
+            // Outside Box Styling:
+            // Box position remains fully visible, styled with a dashed red border,
+            // subtle red tint, and an OUTSIDE indicator watermark.
+            ctx.fillStyle = isActivelyTranslating ? 'rgba(255, 69, 58, 0.18)' : 'rgba(255, 69, 58, 0.08)';
+            ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
+
             ctx.save();
-            ctx.font = '600 11px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
-            ctx.fillStyle = 'rgba(255, 69, 58, 0.4)';
+            ctx.strokeStyle = isActivelyTranslating ? '#FF453A' : 'rgba(255, 69, 58, 0.85)';
+            ctx.lineWidth = isActivelyTranslating ? 2.0 : 1.6;
+            ctx.setLineDash([5, 3]);
+            ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
+            ctx.restore();
+
+            // Centered OUTSIDE watermark badge inside the box
+            ctx.save();
+            ctx.font = '700 10.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.7)';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText('OUTSIDE', centerX, centerY);
             ctx.restore();
+        } else {
+            // Normal Inside Box Styling
+            ctx.fillStyle = isActivelyTranslating ? 'rgba(10, 132, 255, 0.16)' : 'rgba(24, 75, 140, 0.16)';
+            ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
 
-            // Bottom-Left Status
-            ctx.font = '600 9.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
-            ctx.fillStyle = 'rgba(255, 69, 58, 0.75)';
-            ctx.fillText('[ OUTSIDE ]', 6, height - 5);
-
-            // Points Count (Bottom Right)
-            const ptsText = renderedPointsCount > 0 ? `${renderedPointsCount} pts` : '0 pts';
-            ctx.fillStyle = renderedPointsCount > 0 ? 'rgba(48, 209, 88, 0.85)' : 'rgba(255, 159, 10, 0.7)';
-            const ptsMetrics = ctx.measureText(ptsText);
-            ctx.fillText(ptsText, width - ptsMetrics.width - 6, height - 5);
-
-            ctx.restore();
-            return;
+            ctx.strokeStyle = isActivelyTranslating ? '#0A84FF' : '#FFFFFF';
+            ctx.lineWidth = isActivelyTranslating ? 2.0 : 1.5;
+            ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
         }
 
-        // 4. Render Bounding Box Fill & Border
-        ctx.fillStyle = isActivelyTranslating ? 'rgba(10, 132, 255, 0.16)' : 'rgba(24, 75, 140, 0.16)';
-        ctx.fillRect(boxLeft, boxTop, boxPxW, boxPxH);
-
-        ctx.strokeStyle = isActivelyTranslating ? '#0A84FF' : '#FFFFFF';
-        ctx.lineWidth = isActivelyTranslating ? 2.0 : 1.5;
-        ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
-
         // Highlight active resizing edge if any (edge-drag fallback)
-        if (activeResizeAction && activeResizeAction !== 'resize-corner') {
+        if (!isOutside && activeResizeAction && activeResizeAction !== 'resize-corner') {
             ctx.strokeStyle = '#0A84FF';
             ctx.lineWidth = 3.5;
             ctx.beginPath();
@@ -706,7 +706,7 @@ class OrthoCanvasRenderer {
         // Ground reference line for Side and Front views
         if (viewType === 'side' || viewType === 'front') {
             const groundY = boxBottom;
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+            ctx.strokeStyle = isOutside ? 'rgba(255, 69, 58, 0.35)' : 'rgba(255, 255, 255, 0.25)';
             ctx.lineWidth = 1;
             ctx.setLineDash([2, 2]);
             ctx.beginPath();
@@ -717,6 +717,10 @@ class OrthoCanvasRenderer {
         }
 
         // 5. CVAT-style Heading & Rotation Helper
+        if (isOutside) {
+            ctx.save();
+            ctx.globalAlpha = 0.55;
+        }
         if (viewType === 'top') {
             this.drawCVATHeadingHelper(
                 ctx,
@@ -748,9 +752,19 @@ class OrthoCanvasRenderer {
             ctx.stroke();
             this.drawArrow(ctx, boxLeft, centerY, boxLeft - 18, centerY, '#FF3B30', 6, 1.8);
         }
+        if (isOutside) {
+            ctx.restore();
+        }
 
         // 6. CVAT 4 Red Corner Handles (All views)
-        this.drawCornerHandles(ctx, corners, interaction);
+        if (isOutside) {
+            ctx.save();
+            ctx.globalAlpha = 0.5;
+            this.drawCornerHandles(ctx, corners, interaction);
+            ctx.restore();
+        } else {
+            this.drawCornerHandles(ctx, corners, interaction);
+        }
 
         // 7. Interactive HUD Badges
         if (isActivelyRotating) {
@@ -770,7 +784,6 @@ class OrthoCanvasRenderer {
 
         // 8. Dimension Caption (Bottom Left)
         ctx.font = '500 9.5px -apple-system, BlinkMacSystemFont, "SF Pro Text", monospace, sans-serif';
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
         let dimLabel = `${dimH.toFixed(2)}m × ${dimV.toFixed(2)}m`;
         if (viewType === 'top') {
             dimLabel = `W:${sx.toFixed(2)}  L:${sy.toFixed(2)}m`;
@@ -779,7 +792,13 @@ class OrthoCanvasRenderer {
         } else if (viewType === 'side') {
             dimLabel = `W:${sx.toFixed(2)}  H:${sz.toFixed(2)}m`;
         }
-        ctx.fillText(dimLabel, 6, height - 5);
+        if (isOutside) {
+            ctx.fillStyle = 'rgba(255, 69, 58, 0.9)';
+            ctx.fillText(`${dimLabel} • [OUTSIDE]`, 6, height - 5);
+        } else {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.6)';
+            ctx.fillText(dimLabel, 6, height - 5);
+        }
 
         // Points Count (Bottom Right)
         const ptsText = renderedPointsCount > 0 ? `${renderedPointsCount} pts` : '0 pts';
@@ -2886,7 +2905,7 @@ class FrameCard {
      * @param {number} deltaRad - angle increment in radians
      */
     rotateView(viewType, deltaRad) {
-        if (!this.data.box || this.data.outside) return;
+        if (!this.data.box) return;
 
         // Perform authentic 3D local-axis rotation matching Three.js / CVAT canvas3d
         const newAngles = Math3D.rotateLocal(this.data.box, viewType, deltaRad);
@@ -3139,25 +3158,27 @@ class FrameCard {
 
         if (this.yawBadge) {
             const rz = box.rz ?? 0;
-            this.yawBadge.textContent = isOutside ? 'Yaw: Outside' : `Yaw: ${toDegStr(rz)}`;
+            this.yawBadge.textContent = isOutside ? `Yaw: ${toDegStr(rz)} (Outside)` : `Yaw: ${toDegStr(rz)}`;
         }
 
         if (this.angleDisplays) {
             const localAngles = Math3D.getLocalAngles(box);
             if (this.angleDisplays.top) {
-                this.angleDisplays.top.textContent = isOutside ? '--' : toDegStr(localAngles.yaw);
+                this.angleDisplays.top.textContent = toDegStr(localAngles.yaw);
             }
             if (this.angleDisplays.side) {
-                this.angleDisplays.side.textContent = isOutside ? '--' : toDegStr(localAngles.pitch);
+                this.angleDisplays.side.textContent = toDegStr(localAngles.pitch);
             }
             if (this.angleDisplays.front) {
-                this.angleDisplays.front.textContent = isOutside ? '--' : toDegStr(localAngles.roll);
+                this.angleDisplays.front.textContent = toDegStr(localAngles.roll);
             }
         }
 
         if (this.dimBadge) {
             const { sx = 2, sy = 4, sz = 1.5 } = box;
-            this.dimBadge.textContent = isOutside ? '[Outside]' : `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
+            this.dimBadge.textContent = isOutside
+                ? `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m [Outside]`
+                : `${sx.toFixed(2)} × ${sy.toFixed(2)} × ${sz.toFixed(2)}m`;
         }
     }
 
@@ -3194,7 +3215,7 @@ class FrameCard {
         };
 
         const detectActionAtPos = (pos, metrics) => {
-            if (!this.data.box || this.data.outside) return null;
+            if (!this.data.box) return null;
 
             // 1. Heading rotation helper (Top view only - green circle dot on forward stem)
             if (viewType === 'top') {
@@ -3416,7 +3437,7 @@ class FrameCard {
         });
 
         canvas.addEventListener('pointerdown', (e) => {
-            if (e.button !== 0 || this.data.outside) return; // Only primary mouse button and not outside
+            if (e.button !== 0) return; // Only primary mouse button
 
             const pos = getCanvasPos(e);
             const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);
