@@ -29,10 +29,10 @@ export class FrameCard {
         this.onHover = onHover;
         this.options = options || {};
 
-        // Camera order: default 'top,front,side'
+        // Camera order: fixed default 'top,side,front'
         this.viewOrder = Array.isArray(this.options.viewOrder) && this.options.viewOrder.length === 3
             ? [...this.options.viewOrder]
-            : ['top', 'front', 'side'];
+            : ['top', 'side', 'front'];
 
         // Keep deep copy of original state for reset capability
         this.originalBox = { ...(data.box || {}) };
@@ -193,7 +193,7 @@ export class FrameCard {
 
         const activeOrder = Array.isArray(this.viewOrder) && this.viewOrder.length === 3
             ? this.viewOrder
-            : ['top', 'front', 'side'];
+            : ['top', 'side', 'front'];
 
         for (const viewType of activeOrder) {
             const def = viewDefinitions[viewType] || { id: viewType, label: viewType.toUpperCase() };
@@ -268,9 +268,9 @@ export class FrameCard {
         if (!this.data.box || this.data.outside) return;
 
         // Top: Yaw (rz, around Z)
-        // Side: Pitch (rx, around X)
-        // Front: Roll (ry, around Y)
-        const propKey = viewType === 'top' ? 'rz' : (viewType === 'side' ? 'rx' : 'ry');
+        // Front: Roll (rx, around X)
+        // Side: Pitch (ry, around Y)
+        const propKey = viewType === 'top' ? 'rz' : (viewType === 'front' ? 'rx' : 'ry');
         const current = typeof this.data.box[propKey] === 'number' ? this.data.box[propKey] : 0;
         let nextVal = current + deltaRad;
 
@@ -292,7 +292,7 @@ export class FrameCard {
     createRotateGroup(viewType = 'top', onRotate) {
         const group = document.createElement('div');
         group.className = 'cvat-qaqc-rot-group';
-        const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'side' ? 'Pitch' : 'Roll');
+        const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'front' ? 'Roll' : 'Pitch');
         group.title = `Xoay góc ${axisName}`;
 
         const isTop = viewType === 'top';

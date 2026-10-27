@@ -460,10 +460,8 @@ console.assert(f10.keyframe === true, 'Frame 10 promoted to keyframe');
 console.assert(f10.points[0] === 12, 'Frame 10 updated position');
 console.log('✓ TrackReader 100% keyframe accuracy & realtime shortest-arc 3D interpolation passed');
 
-// 17. Test Configurable Camera View Order (Top/Front/Side vs Top/Side/Front)
-const defaultViewOrder = ['top', 'front', 'side'];
-const customViewOrder = ['top', 'side', 'front'];
-const frontFirstOrder = ['front', 'side', 'top'];
+// 17. Test Fixed Camera View Order (Top -> Side -> Front)
+const fixedViewOrder = ['top', 'side', 'front'];
 
 const mockGrid = {
     children: [],
@@ -480,24 +478,12 @@ const mockCells = {
     side: { id: 'side' }
 };
 
-// Initial order: Top -> Front -> Side
-for (const v of defaultViewOrder) {
+// Order: Top -> Side -> Front
+for (const v of fixedViewOrder) {
     mockGrid.appendChild(mockCells[v]);
 }
-console.assert(mockGrid.children[0].id === 'top' && mockGrid.children[1].id === 'front' && mockGrid.children[2].id === 'side', 'Default view order is Top, Front, Side');
-
-// Reorder to Front -> Side -> Top
-for (const v of frontFirstOrder) {
-    mockGrid.appendChild(mockCells[v]);
-}
-console.assert(mockGrid.children[0].id === 'front' && mockGrid.children[1].id === 'side' && mockGrid.children[2].id === 'top', 'Reordered view cells to Front, Side, Top without DOM teardown');
-
-// Reorder to Top -> Side -> Front
-for (const v of customViewOrder) {
-    mockGrid.appendChild(mockCells[v]);
-}
-console.assert(mockGrid.children[0].id === 'top' && mockGrid.children[1].id === 'side' && mockGrid.children[2].id === 'front', 'Reordered view cells to Top, Side, Front');
-console.log('✓ Configurable Camera View Order (Top/Front/Side) passed');
+console.assert(mockGrid.children[0].id === 'top' && mockGrid.children[1].id === 'side' && mockGrid.children[2].id === 'front', 'Default view order is strictly Top, Side, Front');
+console.log('✓ Fixed Camera View Order (Top -> Side -> Front) passed');
 
 // 18. Test Quick ID Filter parsing & frame jump logic
 const parseQuickFilterID = (raw) => {

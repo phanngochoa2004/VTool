@@ -14,11 +14,10 @@ export class MacOSDock {
     constructor(callbacks = {}) {
         this.callbacks = callbacks;
         this.isOpen = false;
-        const savedOrder = (typeof window !== 'undefined' && window.localStorage?.getItem('cvat_qaqc_view_order')) || 'top,front,side';
         this.state = {
             height: 480,
-            viewMode: 'all', // 'all', 'top', 'front', 'side'
-            viewOrder: savedOrder.split(','),
+            viewMode: 'all', // 'all', 'top', 'side', 'front'
+            viewOrder: ['top', 'side', 'front'],
             zoom: 1.0,
             pointSize: 1.0,
             cardSize: 'medium',
@@ -224,14 +223,14 @@ export class MacOSDock {
         const rightGroup = document.createElement('div');
         rightGroup.className = 'cvat-qaqc-right-group';
 
-        // Segmented Control: Views
+        // Segmented Control: Views (Top -> Side -> Front)
         const segmented = document.createElement('div');
         segmented.className = 'cvat-qaqc-segmented';
         const viewModes = [
             { id: 'all', label: 'All 3' },
             { id: 'top', label: 'Top' },
-            { id: 'front', label: 'Front' },
-            { id: 'side', label: 'Side' }
+            { id: 'side', label: 'Side' },
+            { id: 'front', label: 'Front' }
         ];
 
         this.segButtons = {};
@@ -243,32 +242,6 @@ export class MacOSDock {
             this.segButtons[vm.id] = btn;
             segmented.appendChild(btn);
         }
-
-        // View Order Selector: Top -> Front -> Side (or Top -> Side -> Front, etc.)
-        const orderSelect = document.createElement('select');
-        orderSelect.className = 'cvat-qaqc-select cvat-qaqc-order-select';
-        orderSelect.style.colorScheme = 'dark';
-        orderSelect.title = 'Thứ tự các góc chiếu (Camera Order)';
-        const currentOrderVal = this.state.viewOrder.join(',');
-        [
-            { val: 'top,front,side', label: 'Top → Front → Side' },
-            { val: 'top,side,front', label: 'Top → Side → Front' },
-            { val: 'front,side,top', label: 'Front → Side → Top' },
-            { val: 'side,front,top', label: 'Side → Front → Top' }
-        ].forEach(({ val, label }) => {
-            const opt = document.createElement('option');
-            opt.value = val;
-            opt.textContent = label;
-            opt.style.backgroundColor = '#222225';
-            opt.style.color = '#ffffff';
-            if (val === currentOrderVal) opt.selected = true;
-            orderSelect.appendChild(opt);
-        });
-
-        orderSelect.addEventListener('change', (e) => {
-            this.setViewOrder(e.target.value.split(','));
-        });
-        this.orderSelect = orderSelect;
 
         // Card Display Size Selector (Compact / Medium / Large)
         const sizeSelect = document.createElement('select');
@@ -343,10 +316,10 @@ export class MacOSDock {
         });
 
         // Rotate Buttons Group (Active Frame)
-        const rotGroup = document.createElement('div');
-        rotGroup.className = 'cvat-qaqc-rot-group';
-        this.rotGroup = rotGroup;
-        this.updateToolbarRotateButtons();
+        // const rotGroup = document.createElement('div');
+        // rotGroup.className = 'cvat-qaqc-rot-group';
+        // this.rotGroup = rotGroup;
+        // this.updateToolbarRotateButtons();
 
         // Copy Size Button (Active Frame / Cuboid)
         const copySizeBtn = document.createElement('button');
@@ -386,7 +359,6 @@ export class MacOSDock {
         hideBtn.addEventListener('click', () => this.close());
 
         rightGroup.appendChild(segmented);
-        rightGroup.appendChild(orderSelect);
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
@@ -430,7 +402,7 @@ export class MacOSDock {
 
         const mode = this.state.viewMode;
         const targetView = (mode === 'side' || mode === 'front') ? mode : 'top';
-        const axisName = targetView === 'top' ? 'Yaw (Trục Z)' : (targetView === 'side' ? 'Pitch (Trục X)' : 'Roll (Trục Y)');
+        const axisName = targetView === 'top' ? 'Yaw (Trục Z)' : (targetView === 'front' ? 'Roll (Trục X)' : 'Pitch (Trục Y)');
         const isTop = targetView === 'top';
         const stepDeg = isTop ? 5 : 1;
         const stepRad = stepDeg * Math.PI / 180;
