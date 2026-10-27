@@ -221,6 +221,88 @@
   color: #FFFFFF;
 }
 
+/* Quick ID Filter Bar inside Dock Toolbar */
+.cvat-qaqc-quick-filter-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--macos-border-subtle);
+  border-radius: 6px;
+  padding: 1px 3px;
+  transition: all 0.2s ease;
+}
+
+.cvat-qaqc-quick-filter-bar:focus-within {
+  border-color: var(--macos-accent);
+  box-shadow: 0 0 0 2px var(--macos-accent-glow);
+}
+
+.cvat-qaqc-quick-filter-input {
+  width: 95px;
+  height: 22px;
+  background: transparent;
+  border: none;
+  color: var(--macos-text-primary);
+  font-size: 11px;
+  font-family: var(--macos-font-mono, monospace);
+  padding: 0 4px;
+  outline: none;
+}
+
+.cvat-qaqc-quick-filter-input::placeholder {
+  color: rgba(255, 255, 255, 0.35);
+  font-family: var(--macos-font);
+}
+
+.cvat-qaqc-quick-filter-btn {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 4px;
+  background: rgba(10, 132, 255, 0.2);
+  color: #64D2FF;
+  border: 1px solid rgba(10, 132, 255, 0.35);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cvat-qaqc-quick-filter-btn:hover {
+  background: rgba(10, 132, 255, 0.4);
+  color: #FFFFFF;
+}
+
+.cvat-qaqc-quick-clear-btn {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 4px;
+  background: rgba(255, 69, 58, 0.2);
+  color: #FF6961;
+  border: 1px solid rgba(255, 69, 58, 0.35);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cvat-qaqc-quick-clear-btn:hover {
+  background: rgba(255, 69, 58, 0.4);
+  color: #FFFFFF;
+}
+
+@keyframes errorShake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-4px); }
+  40%, 80% { transform: translateX(4px); }
+}
+
+.cvat-qaqc-quick-filter-bar.error-shake {
+  animation: errorShake 0.4s ease;
+  border-color: #FF453A !important;
+  box-shadow: 0 0 0 2px rgba(255, 69, 58, 0.35) !important;
+}
+
 /* macOS Segmented Control */
 .cvat-qaqc-segmented {
   display: inline-flex;

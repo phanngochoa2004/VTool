@@ -70,8 +70,44 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
         },
         onOpen: () => hook.refreshActiveObject(),
         onFilterObject: async (id) => {
-            await hook.filterByObjectID(id);
-            dock.setFilteredObjectID(id);
+            if (!hook.jobInstance) return false;
+            const targetID = Number(id);
+            if (isNaN(targetID)) return false;
+
+            console.log(`[CVAT-QAQC] User requested quick filter for Object ID #${targetID}...`);
+
+            // 1. Isolate in CVAT (Three.js and Redux)
+            await hook.filterByObjectID(targetID);
+            dock.setFilteredObjectID(targetID);
+
+            // 2. Load track frames for this ID
+            try {
+                const trackFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
+                if (trackFrames && trackFrames.length > 0) {
+                    currentClientID = targetID;
+                    currentTrackFrames = trackFrames;
+
+                    // If current frame is outside the track, jump to the track's first frame
+                    const hasCurrent = trackFrames.some(f => f.frame === hook.currentFrame);
+                    const targetFrame = hasCurrent ? hook.currentFrame : trackFrames[0].frame;
+                    if (!hasCurrent) {
+                        hook.jumpToFrame(targetFrame);
+                    }
+
+                    dock.updateTrack(targetID, trackFrames, targetFrame, pcdCache);
+                    const frameNumbers = trackFrames.map(f => f.frame);
+                    pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                        dock.updateCardPointCloud(loadedFrame, pts);
+                    });
+                    return true;
+                } else {
+                    console.warn(`[CVAT-QAQC] Track #${targetID} has no frames or does not exist`);
+                    return false;
+                }
+            } catch (err) {
+                console.warn(`[CVAT-QAQC] Error loading track #${targetID}:`, err);
+                return false;
+            }
         },
         onClearFilter: async () => {
             await hook.clearFilter();

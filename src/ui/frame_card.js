@@ -17,8 +17,9 @@ export class FrameCard {
      * @param {Function} [onPasteSizeToAll] - callback when user chooses to paste size to all frames
      * @param {Function} [onToggleOutside] - callback when outside is toggled (frame, outside)
      * @param {Function} [onHover] - callback when mouse enters/leaves card (frame, isHovered)
+     * @param {Object} [options] - additional configuration options (e.g. viewOrder)
      */
-    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover) {
+    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover, options = {}) {
         this.data = data;
         this.frame = data.frame;
         this.onSelectFrame = onSelectFrame;
@@ -26,12 +27,19 @@ export class FrameCard {
         this.onPasteSizeToAll = onPasteSizeToAll;
         this.onToggleOutside = onToggleOutside;
         this.onHover = onHover;
+        this.options = options || {};
+
+        // Camera order: default 'top,front,side'
+        this.viewOrder = Array.isArray(this.options.viewOrder) && this.options.viewOrder.length === 3
+            ? [...this.options.viewOrder]
+            : ['top', 'front', 'side'];
 
         // Keep deep copy of original state for reset capability
         this.originalBox = { ...(data.box || {}) };
         this.originalPoints = Array.isArray(data.points) ? [...data.points] : [];
 
         this.canvases = {};
+        this.cells = {};
         this.lastPointCloudData = null;
         this.lastRenderOptions = null;
         this.isCurrent = false;
@@ -172,20 +180,27 @@ export class FrameCard {
             this.triggerJump();
         });
 
-        // 2. Views Grid: CVAT standard order: Top, Side, Front
+        // 2. Views Grid: Configurable order (default: Top, Front, Side)
         const grid = document.createElement('div');
         grid.className = 'cvat-qaqc-views-grid';
         this.grid = grid;
 
-        const views = [
-            { id: 'top', label: 'Top' },
-            { id: 'side', label: 'Side' },
-            { id: 'front', label: 'Front' }
-        ];
+        const viewDefinitions = {
+            top: { id: 'top', label: 'Top' },
+            front: { id: 'front', label: 'Front' },
+            side: { id: 'side', label: 'Side' }
+        };
 
-        for (const { id: viewType, label } of views) {
+        const activeOrder = Array.isArray(this.viewOrder) && this.viewOrder.length === 3
+            ? this.viewOrder
+            : ['top', 'front', 'side'];
+
+        for (const viewType of activeOrder) {
+            const def = viewDefinitions[viewType] || { id: viewType, label: viewType.toUpperCase() };
+            const label = def.label;
             const cell = document.createElement('div');
             cell.className = `cvat-qaqc-view-cell cell-${viewType}`;
+            this.cells[viewType] = cell;
 
             // CVAT-style Header Strip for each view with integrated rotation buttons
             const cellHeader = document.createElement('div');
@@ -227,6 +242,21 @@ export class FrameCard {
         card.appendChild(grid);
 
         return card;
+    }
+
+    /**
+     * Reorder view cells without destroying DOM or canvases
+     * @param {Array<string>} orderArray
+     */
+    setViewOrder(orderArray) {
+        if (!this.grid || !this.cells || !Array.isArray(orderArray)) return;
+        this.viewOrder = [...orderArray];
+        for (const viewType of orderArray) {
+            const cell = this.cells[viewType];
+            if (cell) {
+                this.grid.appendChild(cell);
+            }
+        }
     }
 
     /**

@@ -2520,8 +2520,9 @@ class FrameCard {
      * @param {Function} [onPasteSizeToAll] - callback when user chooses to paste size to all frames
      * @param {Function} [onToggleOutside] - callback when outside is toggled (frame, outside)
      * @param {Function} [onHover] - callback when mouse enters/leaves card (frame, isHovered)
+     * @param {Object} [options] - additional configuration options (e.g. viewOrder)
      */
-    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover) {
+    constructor(data, onSelectFrame, onUpdateCuboid, onPasteSizeToAll, onToggleOutside, onHover, options = {}) {
         this.data = data;
         this.frame = data.frame;
         this.onSelectFrame = onSelectFrame;
@@ -2529,12 +2530,19 @@ class FrameCard {
         this.onPasteSizeToAll = onPasteSizeToAll;
         this.onToggleOutside = onToggleOutside;
         this.onHover = onHover;
+        this.options = options || {};
+
+        // Camera order: default 'top,front,side'
+        this.viewOrder = Array.isArray(this.options.viewOrder) && this.options.viewOrder.length === 3
+            ? [...this.options.viewOrder]
+            : ['top', 'front', 'side'];
 
         // Keep deep copy of original state for reset capability
         this.originalBox = { ...(data.box || {}) };
         this.originalPoints = Array.isArray(data.points) ? [...data.points] : [];
 
         this.canvases = {};
+        this.cells = {};
         this.lastPointCloudData = null;
         this.lastRenderOptions = null;
         this.isCurrent = false;
@@ -2675,20 +2683,27 @@ class FrameCard {
             this.triggerJump();
         });
 
-        // 2. Views Grid: CVAT standard order: Top, Side, Front
+        // 2. Views Grid: Configurable order (default: Top, Front, Side)
         const grid = document.createElement('div');
         grid.className = 'cvat-qaqc-views-grid';
         this.grid = grid;
 
-        const views = [
-            { id: 'top', label: 'Top' },
-            { id: 'side', label: 'Side' },
-            { id: 'front', label: 'Front' }
-        ];
+        const viewDefinitions = {
+            top: { id: 'top', label: 'Top' },
+            front: { id: 'front', label: 'Front' },
+            side: { id: 'side', label: 'Side' }
+        };
 
-        for (const { id: viewType, label } of views) {
+        const activeOrder = Array.isArray(this.viewOrder) && this.viewOrder.length === 3
+            ? this.viewOrder
+            : ['top', 'front', 'side'];
+
+        for (const viewType of activeOrder) {
+            const def = viewDefinitions[viewType] || { id: viewType, label: viewType.toUpperCase() };
+            const label = def.label;
             const cell = document.createElement('div');
             cell.className = `cvat-qaqc-view-cell cell-${viewType}`;
+            this.cells[viewType] = cell;
 
             // CVAT-style Header Strip for each view with integrated rotation buttons
             const cellHeader = document.createElement('div');
@@ -2730,6 +2745,21 @@ class FrameCard {
         card.appendChild(grid);
 
         return card;
+    }
+
+    /**
+     * Reorder view cells without destroying DOM or canvases
+     * @param {Array<string>} orderArray
+     */
+    setViewOrder(orderArray) {
+        if (!this.grid || !this.cells || !Array.isArray(orderArray)) return;
+        this.viewOrder = [...orderArray];
+        for (const viewType of orderArray) {
+            const cell = this.cells[viewType];
+            if (cell) {
+                this.grid.appendChild(cell);
+            }
+        }
     }
 
     /**
@@ -3478,13 +3508,16 @@ class MacOSDock {
     constructor(callbacks = {}) {
         this.callbacks = callbacks;
         this.isOpen = false;
+        const savedOrder = (typeof window !== 'undefined' && window.localStorage?.getItem('cvat_qaqc_view_order')) || 'top,front,side';
         this.state = {
             height: 480,
             viewMode: 'all', // 'all', 'top', 'front', 'side'
+            viewOrder: savedOrder.split(','),
             zoom: 1.0,
             pointSize: 1.0,
             cardSize: 'medium',
             activeClientID: null,
+            filteredClientID: null,
             currentFrame: 0,
             framesData: []
         };
@@ -3497,6 +3530,12 @@ class MacOSDock {
         this.filmstrip = null;
         this.trackBadge = null;
         this.framesBadge = null;
+        this.filterBadge = null;
+        this.filterInput = null;
+        this.quickFilterBtn = null;
+        this.quickClearBtn = null;
+        this.orderSelect = null;
+        this.emptyState = null;
         this.emptyState = null;
 
         this.initDOM();
@@ -3592,6 +3631,78 @@ class MacOSDock {
         framesBadge.textContent = '0 frames';
         this.framesBadge = framesBadge;
 
+        // Quick ID Filter Bar (Allows user to quickly filter by Object ID directly inside the dock)
+        const filterBar = document.createElement('div');
+        filterBar.className = 'cvat-qaqc-quick-filter-bar';
+
+        const filterInput = document.createElement('input');
+        filterInput.type = 'text';
+        filterInput.className = 'cvat-qaqc-quick-filter-input';
+        filterInput.placeholder = 'Lọc ID (vd: 102)...';
+        filterInput.title = 'Nhập Object ID cần lọc và ấn Enter';
+        this.filterInput = filterInput;
+
+        const filterBtn = document.createElement('button');
+        filterBtn.className = 'cvat-qaqc-btn cvat-qaqc-quick-filter-btn';
+        filterBtn.textContent = '🔍 Lọc';
+        filterBtn.title = 'Lọc chỉ hiển thị Object ID này (Enter)';
+        this.quickFilterBtn = filterBtn;
+
+        const clearFilterBtn = document.createElement('button');
+        clearFilterBtn.className = 'cvat-qaqc-btn cvat-qaqc-quick-clear-btn';
+        clearFilterBtn.textContent = '✕ Bỏ lọc';
+        clearFilterBtn.title = 'Bỏ lọc, hiện lại toàn bộ đối tượng';
+        clearFilterBtn.style.display = 'none';
+        this.quickClearBtn = clearFilterBtn;
+
+        const executeFilter = async () => {
+            const rawVal = filterInput.value.trim().replace(/^#/, '');
+            if (!rawVal) return;
+            const targetID = parseInt(rawVal, 10);
+            if (isNaN(targetID)) {
+                filterBar.classList.add('error-shake');
+                setTimeout(() => filterBar.classList.remove('error-shake'), 600);
+                return;
+            }
+            filterBtn.disabled = true;
+            filterBtn.textContent = '...';
+            try {
+                if (typeof this.callbacks.onFilterObject === 'function') {
+                    const success = await this.callbacks.onFilterObject(targetID);
+                    if (success !== false) {
+                        this.setFilteredObjectID(targetID);
+                    } else {
+                        filterBar.classList.add('error-shake');
+                        filterInput.title = `Không tìm thấy Object ID #${targetID}`;
+                        setTimeout(() => filterBar.classList.remove('error-shake'), 600);
+                    }
+                }
+            } finally {
+                filterBtn.disabled = false;
+                filterBtn.textContent = '🔍 Lọc';
+            }
+        };
+
+        filterInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                executeFilter();
+            }
+        });
+        filterBtn.addEventListener('click', () => executeFilter());
+
+        clearFilterBtn.addEventListener('click', async () => {
+            if (typeof this.callbacks.onClearFilter === 'function') {
+                await this.callbacks.onClearFilter();
+            }
+            this.setFilteredObjectID(null);
+            filterInput.value = '';
+        });
+
+        filterBar.appendChild(filterInput);
+        filterBar.appendChild(filterBtn);
+        filterBar.appendChild(clearFilterBtn);
+
         // Filter Badge (Shows currently isolated/filtered Object ID)
         const filterBadge = document.createElement('span');
         filterBadge.className = 'cvat-qaqc-filter-badge';
@@ -3601,20 +3712,21 @@ class MacOSDock {
         leftGroup.appendChild(title);
         leftGroup.appendChild(trackBadge);
         leftGroup.appendChild(framesBadge);
+        leftGroup.appendChild(filterBar);
         leftGroup.appendChild(filterBadge);
 
         // Right Controls
         const rightGroup = document.createElement('div');
         rightGroup.className = 'cvat-qaqc-right-group';
 
-        // Segmented Control: Views (CVAT Order: Top, Side, Front)
+        // Segmented Control: Views
         const segmented = document.createElement('div');
         segmented.className = 'cvat-qaqc-segmented';
         const viewModes = [
             { id: 'all', label: 'All 3 Views' },
             { id: 'top', label: 'Top' },
-            { id: 'side', label: 'Side' },
-            { id: 'front', label: 'Front' }
+            { id: 'front', label: 'Front' },
+            { id: 'side', label: 'Side' }
         ];
 
         this.segButtons = {};
@@ -3626,6 +3738,32 @@ class MacOSDock {
             this.segButtons[vm.id] = btn;
             segmented.appendChild(btn);
         }
+
+        // View Order Selector: Top -> Front -> Side (or Top -> Side -> Front, etc.)
+        const orderSelect = document.createElement('select');
+        orderSelect.className = 'cvat-qaqc-select cvat-qaqc-order-select';
+        orderSelect.style.colorScheme = 'dark';
+        orderSelect.title = 'Thứ tự các góc chiếu (Camera Order)';
+        const currentOrderVal = this.state.viewOrder.join(',');
+        [
+            { val: 'top,front,side', label: 'Cam: Top → Front → Side' },
+            { val: 'top,side,front', label: 'Cam: Top → Side → Front' },
+            { val: 'front,side,top', label: 'Cam: Front → Side → Top' },
+            { val: 'side,front,top', label: 'Cam: Side → Front → Top' }
+        ].forEach(({ val, label }) => {
+            const opt = document.createElement('option');
+            opt.value = val;
+            opt.textContent = label;
+            opt.style.backgroundColor = '#222225';
+            opt.style.color = '#ffffff';
+            if (val === currentOrderVal) opt.selected = true;
+            orderSelect.appendChild(opt);
+        });
+
+        orderSelect.addEventListener('change', (e) => {
+            this.setViewOrder(e.target.value.split(','));
+        });
+        this.orderSelect = orderSelect;
 
         // Card Display Size Selector (Compact / Medium / Large)
         const sizeSelect = document.createElement('select');
@@ -3744,6 +3882,7 @@ class MacOSDock {
         hideBtn.addEventListener('click', () => this.close());
 
         rightGroup.appendChild(segmented);
+        rightGroup.appendChild(orderSelect);
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
@@ -3917,6 +4056,15 @@ class MacOSDock {
      */
     setFilteredObjectID(clientID) {
         this.state.filteredClientID = clientID;
+        if (this.filterInput) {
+            if (clientID !== null && typeof clientID !== 'undefined') {
+                this.filterInput.value = String(clientID);
+                if (this.quickClearBtn) this.quickClearBtn.style.display = 'inline-flex';
+            } else {
+                this.filterInput.value = '';
+                if (this.quickClearBtn) this.quickClearBtn.style.display = 'none';
+            }
+        }
         if (this.filterBadge) {
             if (clientID !== null && typeof clientID !== 'undefined') {
                 this.filterBadge.style.display = 'inline-flex';
@@ -3934,6 +4082,28 @@ class MacOSDock {
                 this.filterBadge.style.display = 'none';
                 this.filterBadge.innerHTML = '';
             }
+        }
+    }
+
+    /**
+     * Set camera view order across all cards
+     * @param {Array<string>} orderArray
+     */
+    setViewOrder(orderArray) {
+        if (!Array.isArray(orderArray) || orderArray.length === 0) return;
+        this.state.viewOrder = [...orderArray];
+        try {
+            if (typeof window !== 'undefined' && window.localStorage) {
+                window.localStorage.setItem('cvat_qaqc_view_order', orderArray.join(','));
+            }
+        } catch (_) {}
+
+        if (this.orderSelect && this.orderSelect.value !== orderArray.join(',')) {
+            this.orderSelect.value = orderArray.join(',');
+        }
+
+        for (const card of this.cards.values()) {
+            card.setViewOrder(orderArray);
         }
     }
 
@@ -4075,7 +4245,8 @@ class MacOSDock {
                 },
                 (frame, isHovered) => {
                     this.hoveredFrame = isHovered ? frame : (this.hoveredFrame === frame ? null : this.hoveredFrame);
-                }
+                },
+                { viewOrder: this.state.viewOrder }
             );
 
             this.cards.set(fData.frame, card);
@@ -4266,8 +4437,44 @@ class MacOSDock {
         },
         onOpen: () => hook.refreshActiveObject(),
         onFilterObject: async (id) => {
-            await hook.filterByObjectID(id);
-            dock.setFilteredObjectID(id);
+            if (!hook.jobInstance) return false;
+            const targetID = Number(id);
+            if (isNaN(targetID)) return false;
+
+            console.log(`[CVAT-QAQC] User requested quick filter for Object ID #${targetID}...`);
+
+            // 1. Isolate in CVAT (Three.js and Redux)
+            await hook.filterByObjectID(targetID);
+            dock.setFilteredObjectID(targetID);
+
+            // 2. Load track frames for this ID
+            try {
+                const trackFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
+                if (trackFrames && trackFrames.length > 0) {
+                    currentClientID = targetID;
+                    currentTrackFrames = trackFrames;
+
+                    // If current frame is outside the track, jump to the track's first frame
+                    const hasCurrent = trackFrames.some(f => f.frame === hook.currentFrame);
+                    const targetFrame = hasCurrent ? hook.currentFrame : trackFrames[0].frame;
+                    if (!hasCurrent) {
+                        hook.jumpToFrame(targetFrame);
+                    }
+
+                    dock.updateTrack(targetID, trackFrames, targetFrame, pcdCache);
+                    const frameNumbers = trackFrames.map(f => f.frame);
+                    pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                        dock.updateCardPointCloud(loadedFrame, pts);
+                    });
+                    return true;
+                } else {
+                    console.warn(`[CVAT-QAQC] Track #${targetID} has no frames or does not exist`);
+                    return false;
+                }
+            } catch (err) {
+                console.warn(`[CVAT-QAQC] Error loading track #${targetID}:`, err);
+                return false;
+            }
         },
         onClearFilter: async () => {
             await hook.clearFilter();

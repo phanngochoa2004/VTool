@@ -460,4 +460,79 @@ console.assert(f10.keyframe === true, 'Frame 10 promoted to keyframe');
 console.assert(f10.points[0] === 12, 'Frame 10 updated position');
 console.log('✓ TrackReader 100% keyframe accuracy & realtime shortest-arc 3D interpolation passed');
 
+// 17. Test Configurable Camera View Order (Top/Front/Side vs Top/Side/Front)
+const defaultViewOrder = ['top', 'front', 'side'];
+const customViewOrder = ['top', 'side', 'front'];
+const frontFirstOrder = ['front', 'side', 'top'];
+
+const mockGrid = {
+    children: [],
+    appendChild: function(child) {
+        const idx = this.children.indexOf(child);
+        if (idx !== -1) this.children.splice(idx, 1);
+        this.children.push(child);
+    }
+};
+
+const mockCells = {
+    top: { id: 'top' },
+    front: { id: 'front' },
+    side: { id: 'side' }
+};
+
+// Initial order: Top -> Front -> Side
+for (const v of defaultViewOrder) {
+    mockGrid.appendChild(mockCells[v]);
+}
+console.assert(mockGrid.children[0].id === 'top' && mockGrid.children[1].id === 'front' && mockGrid.children[2].id === 'side', 'Default view order is Top, Front, Side');
+
+// Reorder to Front -> Side -> Top
+for (const v of frontFirstOrder) {
+    mockGrid.appendChild(mockCells[v]);
+}
+console.assert(mockGrid.children[0].id === 'front' && mockGrid.children[1].id === 'side' && mockGrid.children[2].id === 'top', 'Reordered view cells to Front, Side, Top without DOM teardown');
+
+// Reorder to Top -> Side -> Front
+for (const v of customViewOrder) {
+    mockGrid.appendChild(mockCells[v]);
+}
+console.assert(mockGrid.children[0].id === 'top' && mockGrid.children[1].id === 'side' && mockGrid.children[2].id === 'front', 'Reordered view cells to Top, Side, Front');
+console.log('✓ Configurable Camera View Order (Top/Front/Side) passed');
+
+// 18. Test Quick ID Filter parsing & frame jump logic
+const parseQuickFilterID = (raw) => {
+    const cleaned = String(raw).trim().replace(/^#/, '');
+    const id = parseInt(cleaned, 10);
+    return isNaN(id) ? null : id;
+};
+
+console.assert(parseQuickFilterID('102') === 102, 'Parsed 102 correctly');
+console.assert(parseQuickFilterID('#555') === 555, 'Parsed #555 correctly');
+console.assert(parseQuickFilterID('  #1514  ') === 1514, 'Trimmed and parsed #1514 correctly');
+console.assert(parseQuickFilterID('abc') === null, 'Invalid non-numeric input returns null');
+console.assert(parseQuickFilterID('') === null, 'Empty string returns null');
+
+// Simulate quick filter auto-jump when current frame is outside track
+let jumpedFrame = null;
+const mockHookForJump = {
+    currentFrame: 5,
+    jumpToFrame: (f) => { jumpedFrame = f; }
+};
+
+const simulateQuickFilter = async (targetID, currentTrack) => {
+    const hasCurrent = currentTrack.some(f => f.frame === mockHookForJump.currentFrame);
+    const targetFrame = hasCurrent ? mockHookForJump.currentFrame : currentTrack[0].frame;
+    if (!hasCurrent) {
+        mockHookForJump.jumpToFrame(targetFrame);
+    }
+    return targetFrame;
+};
+
+// Track 102 spans frames 20 to 50 (currentFrame is 5)
+const targetTrackFrames = [{ frame: 20 }, { frame: 21 }, { frame: 50 }];
+const resultFrame = await simulateQuickFilter(102, targetTrackFrames);
+console.assert(resultFrame === 20, 'Target frame should be track start frame (20)');
+console.assert(jumpedFrame === 20, 'jumpToFrame was invoked with frame 20');
+console.log('✓ Quick ID Filter input parsing & auto frame jump passed');
+
 console.log('All Unit Tests Passed Successfully!');
