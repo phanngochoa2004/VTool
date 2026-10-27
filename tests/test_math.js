@@ -341,11 +341,10 @@ console.assert(isAllowedSite('http://127.0.0.1:8080/tasks/2') === true, '127.0.0
 console.assert(isAllowedSite('https://app.cvat.ai/tasks/100') === true, 'app.cvat.ai should be allowed');
 console.assert(isAllowedSite('http://localhost:3000') === true, 'localhost:3000 should be allowed');
 
-// Custom CVAT instances
-console.assert(isAllowedSite('https://cvat-test.vantixapps.net/tasks/1/jobs/1') === true, 'cvat-test.vantixapps.net should be allowed');
+// Custom CVAT instances (matched via https://cvat*)
+console.assert(isAllowedSite('https://cvat-test.vantixapps.net/tasks/1/jobs/1') === true, 'cvat-test.vantixapps.net matched via https://cvat*');
 console.assert(isAllowedSite('https://cvat-prod.vantixapps.net/jobs/42') === true, 'cvat-prod.vantixapps.net matched via https://cvat*');
 console.assert(isAllowedSite('https://cvat.internal-company.org/tasks/5') === true, 'cvat.internal-company.org matched via https://cvat*');
-console.assert(isAllowedSite('https://label.vantixapps.net/jobs/1') === true, 'label.vantixapps.net matched via *.vantixapps.net');
 
 // Non-CVAT ports / sites should be blocked cleanly
 console.assert(isAllowedSite('http://127.0.0.1:5173/plans/week-02/test-2-listening-p1-p2') === false, 'Vite port 5173 must be rejected');

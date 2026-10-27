@@ -49,14 +49,8 @@ const ALLOWED_SITES = [
     'https://app.cvat.ai',
     'https://cvat.ai',
 
-    // Custom CVAT Server instances (ví dụ server của bạn)
-    'https://cvat-test.vantixapps.net',
-
     // Hỗ trợ dạng tiền tố: khớp mọi site bắt đầu bằng https://cvat...
     'https://cvat*',
-
-    // Hỗ trợ mọi subdomain của vantixapps.net
-    '*.vantixapps.net'
 ];
 
 /**
