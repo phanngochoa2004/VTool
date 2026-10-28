@@ -7,7 +7,7 @@
 (function registerMacOSDock(global) {
     'use strict';
 
-const { FrameCard, SizeClipboard, TrackReader } = global.CVATQAQC;
+const { FrameCard, SizeClipboard, TrackReader, HotkeyPreferences } = global.CVATQAQC;
 
 class MacOSDock {
     /**
@@ -64,7 +64,7 @@ class MacOSDock {
         const dot = document.createElement('span');
         dot.className = 'cvat-qaqc-trigger-dot empty';
         const label = document.createElement('span');
-        label.textContent = '3D';
+        label.textContent = '⏻ 3D';
         const badge = document.createElement('span');
         badge.className = 'cvat-qaqc-trigger-badge';
 
@@ -350,12 +350,13 @@ class MacOSDock {
         helpBtn.addEventListener('click', () => this.openHelp());
         this.helpBtn = helpBtn;
 
-        // Close / Hide Button (Collapses back to floating button)
-        const hideBtn = document.createElement('button');
-        hideBtn.className = 'cvat-qaqc-btn';
-        hideBtn.textContent = '✕ Ẩn';
-        hideBtn.title = 'Hide inspector (Alt + Q)';
-        hideBtn.addEventListener('click', () => this.close());
+        // Quick UI toggle. When closed, the floating "Power 3D" pill turns it back on.
+        const uiToggleBtn = document.createElement('button');
+        uiToggleBtn.className = 'cvat-qaqc-btn cvat-qaqc-ui-toggle-btn';
+        uiToggleBtn.textContent = '⏻ UI';
+        uiToggleBtn.title = 'Tắt giao diện Inspector. Bật lại bằng nút ⏻ 3D hoặc Alt+Q';
+        uiToggleBtn.setAttribute('aria-label', 'Tắt giao diện 3D QA/QC Inspector');
+        uiToggleBtn.addEventListener('click', () => this.close());
 
         rightGroup.appendChild(segmented);
         rightGroup.appendChild(sizeSelect);
@@ -363,7 +364,7 @@ class MacOSDock {
         rightGroup.appendChild(ptSelect);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(helpBtn);
-        rightGroup.appendChild(hideBtn);
+        rightGroup.appendChild(uiToggleBtn);
 
         toolbar.appendChild(leftGroup);
         toolbar.appendChild(rightGroup);
@@ -406,6 +407,13 @@ class MacOSDock {
             return element;
         };
 
+        let recordingAction = null;
+        let settingsStatus = null;
+        const shortcutValues = new Map();
+        const refreshShortcutValues = () => shortcutValues.forEach((element, id) => {
+            element.textContent = HotkeyPreferences.format(HotkeyPreferences.combo(id));
+        });
+
         const overlay = create('div', 'cvat-qaqc-help-overlay');
         overlay.hidden = true;
         overlay.setAttribute('aria-hidden', 'true');
@@ -413,6 +421,31 @@ class MacOSDock {
             if (event.target === overlay) this.closeHelp();
         });
         overlay.addEventListener('keydown', (event) => {
+            if (recordingAction) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+                if (event.key === 'Escape') {
+                    settingsStatus.textContent = 'Đã hủy ghi phím.';
+                    recordingAction = null;
+                    return;
+                }
+                const value = HotkeyPreferences.eventCombo(event);
+                if (value === '') {
+                    settingsStatus.textContent = 'Giữ phím bổ trợ rồi nhấn thêm một phím chính…';
+                    return;
+                }
+                if (!value) {
+                    settingsStatus.textContent = 'Chỉ hỗ trợ 1 phím hoặc 1 phím bổ trợ + 1 phím chính.';
+                    return;
+                }
+                const result = HotkeyPreferences.setCombo(recordingAction, value);
+                settingsStatus.textContent = result.ok ? `Đã lưu: ${HotkeyPreferences.format(value)}` : result.message;
+                if (result.ok) {
+                    recordingAction = null;
+                    refreshShortcutValues();
+                }
+                return;
+            }
             if (event.key === 'Escape') {
                 event.preventDefault();
                 event.stopPropagation();
@@ -462,6 +495,18 @@ class MacOSDock {
         header.appendChild(closeBtn);
         panel.appendChild(header);
 
+        const tabs = create('div', 'cvat-qaqc-help-tabs');
+        tabs.setAttribute('role', 'tablist');
+        const guideTab = create('button', 'cvat-qaqc-help-tab active', 'Hướng dẫn');
+        const settingsTab = create('button', 'cvat-qaqc-help-tab', 'Cấu hình phím');
+        for (const tab of [guideTab, settingsTab]) tab.type = 'button';
+        guideTab.setAttribute('role', 'tab');
+        settingsTab.setAttribute('role', 'tab');
+        guideTab.setAttribute('aria-selected', 'true');
+        settingsTab.setAttribute('aria-selected', 'false');
+        tabs.append(guideTab, settingsTab);
+        panel.appendChild(tabs);
+
         const body = create('div', 'cvat-qaqc-help-body');
         body.setAttribute('role', 'document');
 
@@ -499,12 +544,11 @@ class MacOSDock {
 
         addSection('Mở panel và lịch sử', [
             [['Alt', 'Q'], 'Mở hoặc ẩn Inspector.'],
-            [['Alt', 'Shift', 'C'], 'Copy kích thước card active.'],
-            [['Alt', 'Shift', 'V'], 'Dán kích thước vào card active.'],
+            [['Alt', 'C'], 'Copy kích thước card active.'],
+            [['Alt', 'V'], 'Dán kích thước vào card active.'],
             [['O'], 'Bật hoặc tắt Outside của card đang trỏ hoặc frame active.'],
             [['Ctrl/Cmd', 'Z'], 'Undo card đang trỏ; nếu hết lịch sử thì Undo CVAT.'],
-            [['Ctrl/Cmd', 'Shift', 'Z'], 'Redo card đang trỏ; nếu hết lịch sử thì Redo CVAT.'],
-            [['Ctrl', 'Y'], 'Redo card đang trỏ hoặc Redo CVAT.']
+            [['Ctrl/Cmd', 'Y'], 'Redo card đang trỏ hoặc Redo CVAT.']
         ]);
 
         addSection('Dịch chuyển và đổi một mặt', [
@@ -538,7 +582,62 @@ class MacOSDock {
 
         const note = create('p', 'cvat-qaqc-help-note', 'Phím chỉnh box không tự lặp khi giữ. Phím bị khóa khi đang nhập liệu, mở hộp thoại, kéo chuột hoặc box không thể chỉnh sửa.');
         body.appendChild(note);
+        const settingsBody = create('div', 'cvat-qaqc-help-body cvat-qaqc-hotkey-settings');
+        settingsBody.hidden = true;
+        const intro = create('p', 'cvat-qaqc-help-note', 'Bấm “Ghi phím”, sau đó nhấn 1 phím hoặc 1 phím bổ trợ + 1 phím chính. Cấu hình tự lưu trên trình duyệt này.');
+        settingsBody.appendChild(intro);
+        const categories = new Map();
+        for (const definition of HotkeyPreferences.definitions) {
+            if (!categories.has(definition.category)) {
+                const section = create('section', 'cvat-qaqc-help-section');
+                section.appendChild(create('h3', 'cvat-qaqc-help-section-title', definition.category));
+                const list = create('div', 'cvat-qaqc-hotkey-list');
+                section.appendChild(list);
+                settingsBody.appendChild(section);
+                categories.set(definition.category, list);
+            }
+            const row = create('div', 'cvat-qaqc-hotkey-row');
+            row.appendChild(create('span', 'cvat-qaqc-hotkey-label', definition.label));
+            const value = create('kbd', 'cvat-qaqc-hotkey-value', HotkeyPreferences.format(HotkeyPreferences.combo(definition.id)));
+            shortcutValues.set(definition.id, value);
+            row.appendChild(value);
+            const record = create('button', 'cvat-qaqc-hotkey-record', 'Ghi phím');
+            record.type = 'button';
+            record.addEventListener('click', () => {
+                recordingAction = definition.id;
+                settingsStatus.textContent = `Đang ghi “${definition.label}”…`;
+            });
+            row.appendChild(record);
+            categories.get(definition.category).appendChild(row);
+        }
+        const footer = create('div', 'cvat-qaqc-hotkey-footer');
+        settingsStatus = create('span', 'cvat-qaqc-hotkey-status', '');
+        settingsStatus.setAttribute('role', 'status');
+        const reset = create('button', 'cvat-qaqc-hotkey-reset', 'Khôi phục mặc định');
+        reset.type = 'button';
+        reset.addEventListener('click', () => {
+            HotkeyPreferences.reset();
+            recordingAction = null;
+            refreshShortcutValues();
+            settingsStatus.textContent = 'Đã khôi phục toàn bộ phím mặc định.';
+        });
+        footer.append(settingsStatus, reset);
+        settingsBody.appendChild(footer);
+
+        const selectTab = (settings) => {
+            body.hidden = settings;
+            settingsBody.hidden = !settings;
+            guideTab.classList.toggle('active', !settings);
+            settingsTab.classList.toggle('active', settings);
+            guideTab.setAttribute('aria-selected', String(!settings));
+            settingsTab.setAttribute('aria-selected', String(settings));
+            recordingAction = null;
+        };
+        guideTab.addEventListener('click', () => selectTab(false));
+        settingsTab.addEventListener('click', () => selectTab(true));
+
         panel.appendChild(body);
+        panel.appendChild(settingsBody);
         overlay.appendChild(panel);
         this.helpDialog = overlay;
         return overlay;
@@ -632,71 +731,22 @@ class MacOSDock {
             if (tag === 'INPUT' || tag === 'TEXTAREA' || e.target?.isContentEditable) {
                 return;
             }
-
-            const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-
-            if ((e.altKey || e.metaKey) && (e.code === 'KeyQ' || e.key === 'q' || e.key === 'Q')) {
-                e.preventDefault();
-                this.toggleOpen();
-                return;
-            } else if (e.altKey && e.shiftKey && (e.code === 'KeyC' || e.key === 'c' || e.key === 'C')) {
-                e.preventDefault();
-                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
-                if (activeCard) activeCard.handleCopySize();
-                return;
-            } else if (e.altKey && e.shiftKey && (e.code === 'KeyV' || e.key === 'v' || e.key === 'V')) {
-                e.preventDefault();
-                const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
-                if (activeCard) activeCard.handlePasteSize();
+            const action = HotkeyPreferences?.matchEvent(e, 'dock');
+            if (!action) return;
+            e.preventDefault();
+            const activeCard = this.cards.get(this.hoveredFrame ?? this.state.currentFrame) || this.cards.values().next().value;
+            if (action.id === 'toggle_ui') return this.toggleOpen();
+            if (action.id === 'copy_size') return activeCard?.handleCopySize();
+            if (action.id === 'paste_size') return activeCard?.handlePasteSize();
+            if (action.id === 'toggle_frame_outside') return activeCard?.toggleOutside();
+            if (action.id === 'undo') {
+                if (activeCard?.undo()) e.stopPropagation();
+                else this.callbacks.onUndo?.();
                 return;
             }
-
-            // Hotkey O to toggle outside directly on the box at hovered or active frame
-            if (!isCtrlOrCmd && !e.altKey && !e.shiftKey) {
-                if (e.code === 'KeyO' || e.key === 'o' || e.key === 'O') {
-                    const targetFrame = this.hoveredFrame !== null ? this.hoveredFrame : this.state.currentFrame;
-                    const targetCard = this.cards.get(targetFrame);
-                    if (targetCard) {
-                        e.preventDefault();
-                        targetCard.toggleOutside();
-                        return;
-                    }
-                }
-            }
-
-            // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
-            if (isCtrlOrCmd && !e.altKey) {
-                const targetFrame = this.hoveredFrame !== null ? this.hoveredFrame : this.state.currentFrame;
-                const targetCard = this.cards.get(targetFrame);
-
-                if ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
-                    // Local Frame Undo has top priority when hovering or focused on a card
-                    if (targetCard && targetCard.undo()) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // Global fallback undo on CVAT & UI
-                    if (typeof this.callbacks.onUndo === 'function') {
-                        e.preventDefault();
-                        this.callbacks.onUndo();
-                    }
-                } else if (
-                    ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && e.shiftKey) ||
-                    (e.code === 'KeyY' || e.key === 'y' || e.key === 'Y')
-                ) {
-                    // Local Frame Redo has top priority when hovering or focused on a card
-                    if (targetCard && targetCard.redo()) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        return;
-                    }
-                    // Global fallback redo on CVAT & UI
-                    if (typeof this.callbacks.onRedo === 'function') {
-                        e.preventDefault();
-                        this.callbacks.onRedo();
-                    }
-                }
+            if (action.id === 'redo') {
+                if (activeCard?.redo()) e.stopPropagation();
+                else this.callbacks.onRedo?.();
             }
         });
     }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CVAT 3D Multi-Frame QA/QC Inspector",
-  "version": "1.2.3",
+  "version": "1.3.0",
   "description": "CVAT 3D multi-frame QA/QC inspector with cuboid hotkeys, track tools and single-face resizing without server requests.",
   "permissions": [
     "activeTab"
@@ -24,6 +24,7 @@
         "src/core/track_reader.js",
         "src/core/cvat_hook.js",
         "src/core/size_clipboard.js",
+        "src/core/hotkey_preferences.js",
         "src/core/hotkeys.js",
         "src/core/hotkeys_autostart.js",
         "src/ui/frame_card.js",

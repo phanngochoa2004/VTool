@@ -433,6 +433,29 @@
   box-shadow: 0 0 0 3px var(--macos-accent-glow);
 }
 
+.cvat-qaqc-ui-toggle-btn {
+  color: rgba(255, 255, 255, 0.76);
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.065);
+}
+
+.cvat-qaqc-ui-toggle-btn:hover {
+  color: #FFFFFF;
+  border-color: rgba(255, 159, 10, 0.48);
+  background: rgba(255, 159, 10, 0.16);
+}
+
+.cvat-qaqc-ui-toggle-btn:active {
+  transform: scale(0.97);
+  background: rgba(255, 159, 10, 0.1);
+}
+
+.cvat-qaqc-ui-toggle-btn:focus-visible {
+  outline: none;
+  border-color: var(--macos-accent);
+  box-shadow: 0 0 0 3px var(--macos-accent-glow);
+}
+
 /* In-app usage guide and keyboard shortcut reference */
 .cvat-qaqc-help-overlay {
   --help-surface: rgba(30, 30, 32, 0.82);
@@ -641,6 +664,92 @@
   background: rgba(255, 159, 10, 0.08);
   font-size: 11.5px;
   line-height: 1.45;
+}
+
+.cvat-qaqc-help-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 7px 18px;
+  border-bottom: 1px solid var(--help-separator);
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.cvat-qaqc-help-tab,
+.cvat-qaqc-hotkey-record,
+.cvat-qaqc-hotkey-reset {
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid var(--help-border);
+  border-radius: 7px;
+  color: var(--help-text);
+  background: rgba(255, 255, 255, 0.06);
+  font: 600 11px/1.2 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+  cursor: pointer;
+}
+
+.cvat-qaqc-help-tab.active {
+  color: #fff;
+  border-color: rgba(10, 132, 255, 0.8);
+  background: #0a84ff;
+}
+
+.cvat-qaqc-help-tab:focus-visible,
+.cvat-qaqc-hotkey-record:focus-visible,
+.cvat-qaqc-hotkey-reset:focus-visible {
+  outline: 3px solid rgba(10, 132, 255, 0.45);
+  outline-offset: 1px;
+}
+
+.cvat-qaqc-hotkey-settings {
+  grid-template-columns: 1fr;
+}
+
+.cvat-qaqc-help-body[hidden] {
+  display: none !important;
+}
+
+.cvat-qaqc-hotkey-list {
+  display: grid;
+  gap: 5px;
+}
+
+.cvat-qaqc-hotkey-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 1fr) 110px 76px;
+  align-items: center;
+  gap: 10px;
+  min-height: 30px;
+}
+
+.cvat-qaqc-hotkey-label {
+  color: var(--help-secondary);
+  font-size: 12px;
+}
+
+.cvat-qaqc-hotkey-value {
+  padding: 4px 7px;
+  border: 1px solid var(--help-border);
+  border-radius: 6px;
+  color: var(--help-text);
+  background: rgba(0, 0, 0, 0.14);
+  text-align: center;
+  font: 600 11px/1.2 ui-monospace, "SFMono-Regular", monospace;
+}
+
+.cvat-qaqc-hotkey-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  position: sticky;
+  bottom: -14px;
+  padding: 10px 0 2px;
+  background: var(--help-surface);
+}
+
+.cvat-qaqc-hotkey-status {
+  color: var(--help-secondary);
+  font-size: 11.5px;
 }
 
 @keyframes cvat-qaqc-help-fade-in {

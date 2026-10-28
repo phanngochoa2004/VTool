@@ -16,7 +16,7 @@
 (function registerHotkeys(global) {
     'use strict';
 
-const { Math3D } = global.CVATQAQC;
+const { Math3D, HotkeyPreferences } = global.CVATQAQC;
 
 function install3DHotkeys({ getInspectorTarget } = {}) {
     const config = {
@@ -58,26 +58,19 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
     const pointers = new Set();
     let running = false;
     let stopped = false;
-    let timer;
-    let notice;
     let lastSync = null;
     let lastOutside = null;
+
+    class StaleHotkeyError extends Error {
+        constructor(message) {
+            super(message);
+            this.name = 'StaleHotkeyError';
+        }
+    }
 
     function report(message, error = false) {
         if (stopped) return;
         (error ? console.warn : console.info)(`[CVAT 3D] ${message}`);
-        if (!notice) {
-            notice = document.createElement('div');
-            notice.style.cssText = 'position:fixed;bottom:22px;left:22px;z-index:2147483647;' +
-                'padding:10px 14px;border-radius:6px;color:white;font:14px sans-serif;' +
-                'pointer-events:none;max-width:520px;white-space:pre-wrap';
-            document.body.appendChild(notice);
-        }
-        notice.textContent = message;
-        notice.style.background = error ? '#982c27' : '#203b50';
-        notice.style.display = 'block';
-        clearTimeout(timer);
-        timer = setTimeout(() => { notice.style.display = 'none'; }, 3000);
     }
 
     function selectedObjects(canvas) {
@@ -522,7 +515,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
 
     async function apply(item) {
         if (stopped || location.href !== item.url || pointers.size) {
-            throw new Error('Đã đổi trang hoặc đang kéo chuột; bỏ thao tác đang chờ.');
+            throw new StaleHotkeyError('Đã đổi trang hoặc đang kéo chuột; bỏ thao tác đang chờ.');
         }
         let state;
         let inspector;
@@ -532,7 +525,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
                 if (stopped || pointers.size || location.href !== item.url || !current ||
                     current.card !== item.inspector.card || current.job !== item.inspector.job ||
                     current.clientID !== item.id || current.frame !== item.frame || current.card.dragState) {
-                    throw new Error('Đã đổi thẻ frame/track hoặc đang kéo box; bỏ phím đang chờ.');
+                    throw new StaleHotkeyError('Đã đổi thẻ frame/track hoặc đang kéo box; bỏ phím đang chờ.');
                 }
                 return current;
             };
@@ -543,14 +536,14 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             assertEditableState(state);
         } else {
             if (!item.canvas.isConnected || findCanvas() !== item.canvas) {
-                throw new Error('Đã đổi canvas CVAT; bỏ thao tác đang chờ.');
+                throw new StaleHotkeyError('Đã đổi canvas CVAT; bỏ thao tác đang chờ.');
             }
             if (item.key === 'layout') return arrangeLayout(item);
             if (item.key === 'p') return outsideTrack(item);
             state = selected(item.canvas).state;
         }
         if (state.clientID !== item.id || state.frame !== item.frame) {
-            throw new Error('Đã đổi box hoặc frame; bỏ thao tác đang chờ.');
+            throw new StaleHotkeyError('Đã đổi box hoặc frame; bỏ thao tác đang chờ.');
         }
         if (item.key === 'g') return syncSize(item, state);
         const points = [...state.points]; // Giữ cả các phần tử dự phòng sau index 8.
@@ -657,6 +650,10 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             while (queue.length && !stopped) await apply(queue.shift());
         } catch (error) {
             queue.length = 0;
+            if (error instanceof StaleHotkeyError) {
+                console.debug(`[CVAT 3D] ${error.message}`);
+                return;
+            }
             report(error.message, true);
         } finally {
             running = false;
@@ -664,25 +661,30 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
     }
 
     function onKey(event) {
-        const layoutShortcut = event.altKey && !event.shiftKey &&
-            (event.code ? event.code === 'KeyT' : event.key?.toLowerCase() === 't');
-        if (event.ctrlKey || event.metaKey || event.isComposing || (event.altKey && !layoutShortcut)) return;
+        if (event.isComposing) return;
         const target = event.composedPath()[0];
         if (target?.isContentEditable || target?.closest?.(
             'input,textarea,select,[contenteditable="true"],[role="textbox"],[role="combobox"]',
         )) return;
         if ([...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.ant-modal,.ant-dropdown')]
             .some((element) => element.getClientRects().length)) return;
-        const key = layoutShortcut ? 'layout' : ({ KeyZ: 'z', KeyX: 'x', KeyQ: 'q', KeyE: 'e', KeyW: 'w', KeyR: 'r',
-            KeyG: 'g', KeyP: 'p',
-            Digit1: '1', Digit2: '2', Digit3: '3', Digit4: '4',
-            ArrowLeft: 'forward', ArrowRight: 'backward', ArrowUp: 'up', ArrowDown: 'down',
-            Numpad1: 'right', Numpad2: 'left', Numpad3: '3', Numpad4: 'roll_right', Numpad5: 'roll_left',
-        })[event.code || event.key] ||
-            event.key?.toLowerCase();
-        if (!['layout', 'z', 'x', 'q', 'e', 'w', 'r', 'g', 'p', '1', '2', '3', '4',
-            'forward', 'backward', 'up', 'down', 'right', 'left', 'roll_right', 'roll_left'].includes(key) ||
-            (event.shiftKey && !['g', 'p'].includes(key) && !resizeAxes[key])) return;
+        const action = HotkeyPreferences?.matchEvent(event, 'editor');
+        if (!action) return;
+        const actions = {
+            layout: ['layout'], rotate_z_90: ['z'], swap_rotate_90: ['x'],
+            rotate_z_left: ['q'], rotate_z_right: ['w'], rotate_side_left: ['e'], rotate_side_right: ['r'],
+            rotate_roll_right: ['roll_right'], rotate_roll_left: ['roll_left'],
+            move_forward: ['forward'], move_backward: ['backward'], move_up: ['up'], move_down: ['down'],
+            move_right: ['right'], move_left: ['left'],
+            resize_forward: ['forward', false, true], resize_backward: ['backward', false, true],
+            resize_up: ['up', false, true], resize_down: ['down', false, true],
+            resize_right: ['right', false, true], resize_left: ['left', false, true],
+            preset_sedan: ['1'], preset_suv: ['2'], preset_motorcycle: ['3'], preset_pedestrian: ['4'],
+            sync_size: ['g'], restore_size: ['g', true],
+            toggle_track_outside: ['p'], restore_track_outside: ['p', true],
+        };
+        const [key, restore = false, resize = false] = actions[action.id] || [];
+        if (!key) return;
         const inspector = key !== 'layout' ? getInspectorTarget?.(event) : null;
         // Never fall through to CVAT's selection check for a key originating inside the panel.
         if (key !== 'layout' && !inspector && target?.closest?.('.cvat-qaqc-dock')) {
@@ -699,14 +701,14 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             if (queue.length >= 12) throw new Error('Đang xử lý nhiều phím; đợi box cập nhật.');
             if (inspector) {
                 queue.push({ key, inspector, id: inspector.clientID, frame: inspector.frame,
-                    job: inspector.job, store: inspector.store, restore: Boolean(event.shiftKey),
+                    job: inspector.job, store: inspector.store, restore,
                     playerFrame: inspector.store?.getState()?.annotation?.player?.frame?.number,
-                    resize: Boolean(event.shiftKey && resizeAxes[key]), url: location.href });
+                    resize, url: location.href });
             } else if (key === 'layout') queue.push({ key, canvas, url: location.href });
-            else if (key === 'p') queue.push(event.shiftKey ? outsideRestoreItem(canvas) : outsideItem(canvas));
+            else if (key === 'p') queue.push(restore ? outsideRestoreItem(canvas) : outsideItem(canvas));
             else {
                 const { state } = selected(canvas);
-                queue.push({ key, restore: Boolean(event.shiftKey), resize: Boolean(event.shiftKey && resizeAxes[key]), canvas,
+                queue.push({ key, restore, resize, canvas,
                     id: state.clientID, frame: state.frame, url: location.href });
             }
             void drain();
@@ -728,8 +730,6 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             stopped = true;
             queue.length = 0;
             controller.abort();
-            clearTimeout(timer);
-            notice?.remove();
             console.info('[CVAT 3D] Đã tắt phím tắt.');
         },
     };

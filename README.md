@@ -60,6 +60,8 @@ Công cụ kiểm định chất lượng (QA/QC) gán nhãn 3D Point Cloud chuy
 
 ## Phím tắt CVAT 3D tích hợp
 
+Bấm nút `?` → **Cấu hình phím** để đổi phím tắt. Mỗi lệnh nhận một phím hoặc một phím bổ trợ + một phím chính; cấu hình tự lưu trong `localStorage` của trình duyệt.
+
 Bộ phím từ `CVAT-3D-Hotkeys-1.6.0` tự chạy cùng Inspector trên các địa chỉ trong `src/config/allowed_sites.js`, kể cả khi mở job 3D sau khi trang đã tải. Chọn đúng một cuboid trước khi chỉnh; phím không can thiệp khi nhập liệu hoặc mở hộp thoại. Dữ liệu point cloud được tính bằng mét.
 
 Trong panel Inspector: đặt con trỏ lên thẻ frame cần sửa ở các ô Top/Side/Front, hoặc bấm trực tiếp vào thẻ/canvas rồi nhấn phím. Phím chỉnh đúng frame của thẻ đó (kể cả frame khác khung CVAT chính), cập nhật cả ba góc nhìn và lưu qua cơ chế chỉnh sửa sẵn có của repo. **Không cần chọn lại box trên CVAT chính.** G/Shift+G đồng bộ/khôi phục kích thước theo box trên thẻ đang chọn; P/Shift+P thao tác Outside của track trong panel. Alt+T vẫn chỉnh bố cục CVAT chính. Bộ tự bật thay thế handler cũ nếu handler đó chưa kết nối với Inspector.
@@ -111,9 +113,9 @@ Sau khi sửa mã nguồn:
 
 1. Mở CVAT local trên trình duyệt Chrome (ví dụ: `http://localhost:8080` hoặc `http://127.0.0.1:8080`).
 2. Mở một Job gán nhãn 3D Point Cloud.
-3. Nút pill `[ 3D ]` nằm khiêm tốn ở góc dưới bên phải màn hình:
-   - Bấm vào nút `[ 3D ]` hoặc nhấn tổ hợp phím **`Alt + Q`** để mở drawer kiểm định.
-   - Nhấn **`Alt + Q`** hoặc nút `[ ✕ Ẩn / Hide ]` để thu gọn lại.
+3. Nút pill `[ ⏻ 3D ]` nằm khiêm tốn ở góc dưới bên phải màn hình:
+   - Bấm `[ ⏻ 3D ]` hoặc nhấn **`Alt + Q`** để bật drawer kiểm định.
+   - Nhấn **`Alt + Q`** hoặc nút `[ ⏻ UI ]` trên toolbar để tắt nhanh giao diện.
 4. Khi click chọn một track / cuboid bất kỳ trên CVAT:
    - Panel sẽ nạp và hiển thị toàn bộ chuỗi frame của vật thể đó (hơn 60 frames) theo dạng cuộn dọc.
    - Mỗi frame hiển thị đầy đủ 3 góc chiếu Top, Front, Side kèm góc quay `Yaw: XX.X°` và kích thước.
