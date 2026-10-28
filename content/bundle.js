@@ -704,27 +704,6 @@ class OrthoCanvasRenderer {
             ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
         }
 
-        // Highlight active resizing edge if any (edge-drag fallback)
-        if (!isOutside && activeResizeAction && activeResizeAction !== 'resize-corner') {
-            ctx.strokeStyle = '#0A84FF';
-            ctx.lineWidth = 3.5;
-            ctx.beginPath();
-            if (activeResizeAction === 'resize-left') {
-                ctx.moveTo(boxLeft, boxTop);
-                ctx.lineTo(boxLeft, boxBottom);
-            } else if (activeResizeAction === 'resize-right') {
-                ctx.moveTo(boxRight, boxTop);
-                ctx.lineTo(boxRight, boxBottom);
-            } else if (activeResizeAction === 'resize-top') {
-                ctx.moveTo(boxLeft, boxTop);
-                ctx.lineTo(boxRight, boxTop);
-            } else if (activeResizeAction === 'resize-bottom') {
-                ctx.moveTo(boxLeft, boxBottom);
-                ctx.lineTo(boxRight, boxBottom);
-            }
-            ctx.stroke();
-        }
-
         // Ground reference line for Side and Front views
         if (viewType === 'side' || viewType === 'front') {
             const groundY = boxBottom;
@@ -3397,7 +3376,7 @@ class FrameCard {
                 }
             }
 
-            // 2. CVAT 4 Red Corner Handles (diagonally opposite vertex remains anchored)
+            // 2. CVAT 4 Red Corner Handles (strictly used for resizing, opposite vertex remains anchored)
             if (metrics.corners) {
                 for (const [key, pt] of Object.entries(metrics.corners)) {
                     const dist = Math.hypot(pos.x - pt.x, pos.y - pt.y);
@@ -3407,23 +3386,9 @@ class FrameCard {
                 }
             }
 
-            // 3. Fallback: Near edges for single-edge resizing (6px tolerance)
-            const tol = 6;
-            const inYRange = pos.y >= metrics.boxTop - tol && pos.y <= metrics.boxBottom + tol;
-            const inXRange = pos.x >= metrics.boxLeft - tol && pos.x <= metrics.boxRight + tol;
-
-            if (inYRange) {
-                if (Math.abs(pos.x - metrics.boxLeft) <= tol) return { action: 'resize-left', target: 'edge-left' };
-                if (Math.abs(pos.x - metrics.boxRight) <= tol) return { action: 'resize-right', target: 'edge-right' };
-            }
-            if (inXRange) {
-                if (Math.abs(pos.y - metrics.boxTop) <= tol) return { action: 'resize-top', target: 'edge-top' };
-                if (Math.abs(pos.y - metrics.boxBottom) <= tol) return { action: 'resize-bottom', target: 'edge-bottom' };
-            }
-
-            // 4. Inside box for translation (drag)
-            if (pos.x > metrics.boxLeft && pos.x < metrics.boxRight &&
-                pos.y > metrics.boxTop && pos.y < metrics.boxBottom) {
+            // 3. Inside box for translation (drag) - edges do NOT resize
+            if (pos.x >= metrics.boxLeft && pos.x <= metrics.boxRight &&
+                pos.y >= metrics.boxTop && pos.y <= metrics.boxBottom) {
                 return { action: 'translate', target: 'box' };
             }
 
@@ -3458,10 +3423,6 @@ class FrameCard {
                     canvas.style.cursor = 'nwse-resize';
                 } else if (target === 'corner-tr' || target === 'corner-bl') {
                     canvas.style.cursor = 'nesw-resize';
-                } else if (target === 'edge-left' || target === 'edge-right') {
-                    canvas.style.cursor = 'ew-resize';
-                } else if (target === 'edge-top' || target === 'edge-bottom') {
-                    canvas.style.cursor = 'ns-resize';
                 } else if (target === 'box') {
                     canvas.style.cursor = 'grab';
                 } else {
@@ -3578,31 +3539,6 @@ class FrameCard {
                 this.data.box.sx = parseFloat(nextSx.toFixed(3));
                 this.data.box.sy = parseFloat(nextSy.toFixed(3));
                 this.data.box.sz = parseFloat(nextSz.toFixed(3));
-            } else if (action.startsWith('resize-')) {
-                // Fallback single-edge resizing
-                const dxPx = pos.x - this.dragState.lastX;
-                const dyPx = pos.y - this.dragState.lastY;
-                this.dragState.lastX = pos.x;
-                this.dragState.lastY = pos.y;
-
-                const scale = metrics.scale;
-                if (action === 'resize-left' || action === 'resize-right') {
-                    const sign = action === 'resize-right' ? 1 : -1;
-                    const deltaM = (dxPx / scale) * sign;
-                    if (viewType === 'top' || viewType === 'side') {
-                        this.data.box.sx = Math.max(0.15, parseFloat(((this.data.box.sx || 1) + deltaM).toFixed(3)));
-                    } else if (viewType === 'front') {
-                        this.data.box.sy = Math.max(0.15, parseFloat(((this.data.box.sy || 1) + deltaM).toFixed(3)));
-                    }
-                } else if (action === 'resize-top' || action === 'resize-bottom') {
-                    const sign = action === 'resize-bottom' ? 1 : -1;
-                    const deltaM = (dyPx / scale) * sign;
-                    if (viewType === 'top') {
-                        this.data.box.sy = Math.max(0.15, parseFloat(((this.data.box.sy || 1) - deltaM).toFixed(3)));
-                    } else if (viewType === 'side' || viewType === 'front') {
-                        this.data.box.sz = Math.max(0.15, parseFloat(((this.data.box.sz || 1) - deltaM).toFixed(3)));
-                    }
-                }
             }
 
             this.requestRender();

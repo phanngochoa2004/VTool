@@ -260,27 +260,6 @@ export class OrthoCanvasRenderer {
             ctx.strokeRect(boxLeft, boxTop, boxPxW, boxPxH);
         }
 
-        // Highlight active resizing edge if any (edge-drag fallback)
-        if (!isOutside && activeResizeAction && activeResizeAction !== 'resize-corner') {
-            ctx.strokeStyle = '#0A84FF';
-            ctx.lineWidth = 3.5;
-            ctx.beginPath();
-            if (activeResizeAction === 'resize-left') {
-                ctx.moveTo(boxLeft, boxTop);
-                ctx.lineTo(boxLeft, boxBottom);
-            } else if (activeResizeAction === 'resize-right') {
-                ctx.moveTo(boxRight, boxTop);
-                ctx.lineTo(boxRight, boxBottom);
-            } else if (activeResizeAction === 'resize-top') {
-                ctx.moveTo(boxLeft, boxTop);
-                ctx.lineTo(boxRight, boxTop);
-            } else if (activeResizeAction === 'resize-bottom') {
-                ctx.moveTo(boxLeft, boxBottom);
-                ctx.lineTo(boxRight, boxBottom);
-            }
-            ctx.stroke();
-        }
-
         // Ground reference line for Side and Front views
         if (viewType === 'side' || viewType === 'front') {
             const groundY = boxBottom;
