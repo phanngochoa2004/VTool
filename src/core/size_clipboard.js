@@ -8,7 +8,10 @@
  * 4. Pure UI operation in CVAT-QAQC: 0 HTTP requests, 0 buttons added to CVAT web page.
  */
 
-export class SizeClipboard {
+(function registerSizeClipboard(global) {
+    'use strict';
+
+class SizeClipboard {
     static _memory = null;
 
     /**
@@ -197,3 +200,6 @@ export class SizeClipboard {
 }
 
 SizeClipboard.init();
+
+global.CVATQAQC.SizeClipboard = SizeClipboard;
+})(window);

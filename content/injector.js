@@ -3,12 +3,17 @@
  * Connects the zero-request hooks, in-memory point cache, and macOS Dock UI.
  */
 
-import { CVATHook } from '../src/core/cvat_hook.js';
-import { PCDCache } from '../src/core/pcd_cache.js';
-import { TrackReader } from '../src/core/track_reader.js';
-import { MacOSDock } from '../src/ui/macos_dock.js';
-import { isAllowedSite } from '../src/config/allowed_sites.js';
-import { start3DHotkeysAutostart } from '../src/core/hotkeys_autostart.js';
+(function startInspector(global) {
+    'use strict';
+
+const {
+    CVATHook,
+    PCDCache,
+    TrackReader,
+    MacOSDock,
+    isAllowedSite,
+    start3DHotkeysAutostart
+} = global.CVATQAQC;
 
 (async function initQAQCInspector() {
     // Chỉ kích hoạt extension trên các trang web thuộc danh sách cho phép (ALLOWED_SITES)
@@ -257,3 +262,5 @@ import { start3DHotkeysAutostart } from '../src/core/hotkeys_autostart.js';
     // Start hooking into CVAT React Fiber / Redux
     await hook.init();
 })();
+
+})(window);

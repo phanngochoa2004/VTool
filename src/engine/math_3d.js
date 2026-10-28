@@ -4,7 +4,10 @@
  * ROI extraction, and parsing PCD (ASCII/Binary) without server calls or external libraries.
  */
 
-export class Math3D {
+(function registerMath3D(global) {
+    'use strict';
+
+class Math3D {
     /** Apply a local or world axis turn without depending on a CVAT Three.js mesh. */
     static rotateEulerXYZ(angles, axis, angle, local = true) {
         const [rx, ry, rz] = angles;
@@ -313,3 +316,6 @@ export class Math3D {
         return { positions, intensities };
     }
 }
+
+global.CVATQAQC.Math3D = Math3D;
+})(window);

@@ -15,11 +15,20 @@ th, td { border: 1px solid #adb9ca; padding: 7px 12px; text-align: left; }
 <table><thead><tr><th>Frame</th><th>Dài X</th><th>Rộng Y</th><th>Cao Z</th><th>Outside</th></tr></thead><tbody id="metrics"></tbody></table>
 <p id="results" role="status"></p>
 <canvas id="native-empty" aria-label="CVAT chính không chọn box"></canvas>
+<script src="../../src/config/version.js"></script>
+<script src="../../src/config/allowed_sites.js"></script>
+<script src="../../src/engine/math_3d.js"></script>
+<script src="../../src/engine/ortho_canvas.js"></script>
+<script src="../../src/core/pcd_cache.js"></script>
+<script src="../../src/core/track_reader.js"></script>
+<script src="../../src/core/cvat_hook.js"></script>
+<script src="../../src/core/size_clipboard.js"></script>
+<script src="../../src/core/hotkeys.js"></script>
+<script src="../../src/core/hotkeys_autostart.js"></script>
+<script src="../../src/ui/frame_card.js"></script>
+<script src="../../src/ui/macos_dock.js"></script>
 <script type="module">
-import { CVATHook } from '../../src/core/cvat_hook.js';
-import { TrackReader } from '../../src/core/track_reader.js';
-import { MacOSDock } from '../../src/ui/macos_dock.js';
-import { start3DHotkeysAutostart } from '../../src/core/hotkeys_autostart.js';
+const { CVATHook, TrackReader, MacOSDock, start3DHotkeysAutostart } = window.CVATQAQC;
 
 const label = { id: 1, name: 'Test vehicle', color: '#30d158' };
 const states = [0, 1, 2].map((frame) => ({ frame, clientID: 7, objectType: 'track', shapeType: 'cuboid',

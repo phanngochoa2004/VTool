@@ -5,7 +5,10 @@
  * Uses CVAT's authentic 3D cuboid shortest-arc interpolation for realtime multi-frame rendering.
  */
 
-export class TrackReader {
+(function registerTrackReader(global) {
+    'use strict';
+
+class TrackReader {
     /**
      * In-memory cache of currently inspected track keyframes
      * @type {{ clientID: number|null, shapes: Array<Object>, label: Object, startFrame: number, stopFrame: number }}
@@ -409,3 +412,6 @@ export class TrackReader {
         return pts;
     }
 }
+
+global.CVATQAQC.TrackReader = TrackReader;
+})(window);

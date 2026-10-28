@@ -1,6 +1,9 @@
-import { install3DHotkeys } from './hotkeys.js';
+(function registerHotkeysAutostart(global) {
+    'use strict';
 
-export function start3DHotkeysAutostart({ getInspectorTarget } = {}) {
+const { install3DHotkeys } = global.CVATQAQC;
+
+function start3DHotkeysAutostart({ getInspectorTarget } = {}) {
     const install = () => install3DHotkeys({ getInspectorTarget });
     window.CVAT3DHotkeysInstall = install;
 
@@ -66,3 +69,6 @@ export function start3DHotkeysAutostart({ getInspectorTarget } = {}) {
     };
     check();
 }
+
+global.CVATQAQC.start3DHotkeysAutostart = start3DHotkeysAutostart;
+})(window);

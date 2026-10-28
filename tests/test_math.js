@@ -1,5 +1,5 @@
-import { Math3D } from '../src/engine/math_3d.js';
-import { TrackReader } from '../src/core/track_reader.js';
+(async function runBrowserMathTests() {
+const { Math3D, TrackReader, OrthoCanvasRenderer, SizeClipboard, CVATHook, isAllowedSite, ALLOWED_SITES } = window.CVATQAQC;
 
 console.log('--- Testing 3D Math & Projections ---');
 
@@ -58,7 +58,6 @@ console.assert(Math.abs(flippedYaw - (0.5 - Math.PI)) < 1e-5, 'Yaw 180 flip shou
 console.log('✓ Heading inversion math passed');
 
 // 6. Test OrthoCanvasRenderer getMetrics & drag translation
-import { OrthoCanvasRenderer } from '../src/engine/ortho_canvas.js';
 const mockCanvas = { width: 220, height: 110 };
 const testBox = { x: 5, y: 10, z: 2, rx: 0, ry: 0, rz: Math.PI / 4, sx: 2, sy: 4, sz: 1.5 };
 const topMetrics = OrthoCanvasRenderer.getMetrics(mockCanvas, testBox, 'top');
@@ -165,7 +164,6 @@ for (const viewType of ['top', 'side', 'front']) {
 console.log('✓ Authentic CVAT 4-corner resizing with fixed opposite anchor passed (12/12 cases error < 1e-12m)');
 
 // 8. Test SizeClipboard (Copy & Paste size mechanism)
-import { SizeClipboard } from '../src/core/size_clipboard.js';
 const sampleBox = { sx: 1.95, sy: 4.82, sz: 1.65 };
 const copied = SizeClipboard.copy(sampleBox);
 console.assert(copied && copied.sx === 1.95 && copied.sy === 4.82 && copied.sz === 1.65, 'SizeClipboard.copy normalizes properly');
@@ -181,7 +179,6 @@ console.assert(normFromJson && normFromJson.sx === 2.1 && normFromJson.sy === 5.
 console.log('✓ SizeClipboard copy & paste mechanism passed');
 
 // 9. Test CVATHook Undo / Redo Mechanism
-import { CVATHook } from '../src/core/cvat_hook.js';
 const hook = new CVATHook();
 let undoCalled = false;
 let redoCalled = false;
@@ -376,7 +373,6 @@ console.assert(setLineDashCalls.some(d => d.length > 0), 'Outside box outline us
 console.log('✓ OrthoCanvasRenderer outside box retention & styling passed');
 
 // 13. Test ALLOWED_SITES whitelist verification without regex
-import { isAllowedSite, ALLOWED_SITES } from '../src/config/allowed_sites.js';
 
 console.assert(isAllowedSite('http://localhost:8080/tasks/1/jobs/1') === true, 'localhost:8080 should be allowed');
 console.assert(isAllowedSite('http://127.0.0.1:8080/tasks/2') === true, '127.0.0.1:8080 should be allowed');
@@ -762,3 +758,7 @@ console.assert(card0.redoStack.length === 0, 'New mutation should clear redo sta
 console.log('✓ Localized FrameCard Undo / Redo history stack passed');
 
 console.log('All Unit Tests Passed Successfully!');
+})().catch((error) => {
+    console.error('Browser math test failed:', error);
+    throw error;
+});

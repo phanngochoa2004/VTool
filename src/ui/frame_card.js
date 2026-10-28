@@ -4,12 +4,12 @@
  * Compact display allowing multiple frames to be visible simultaneously.
  */
 
-import { Math3D } from '../engine/math_3d.js';
-import { OrthoCanvasRenderer } from '../engine/ortho_canvas.js';
-import { TrackReader } from '../core/track_reader.js';
-import { SizeClipboard } from '../core/size_clipboard.js';
+(function registerFrameCard(global) {
+    'use strict';
 
-export class FrameCard {
+const { Math3D, OrthoCanvasRenderer, TrackReader, SizeClipboard } = global.CVATQAQC;
+
+class FrameCard {
     /**
      * @param {Object} data - { frame, points, box, keyframe, outside, label }
      * @param {Function} onSelectFrame - callback when clicked to jump
@@ -1159,3 +1159,6 @@ export class FrameCard {
         }
     }
 }
+
+global.CVATQAQC.FrameCard = FrameCard;
+})(window);

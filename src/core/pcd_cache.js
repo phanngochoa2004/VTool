@@ -4,9 +4,12 @@
  * NEVER makes network requests to the server.
  */
 
-import { Math3D } from '../engine/math_3d.js';
+(function registerPCDCache(global) {
+    'use strict';
 
-export class PCDCache {
+const { Math3D } = global.CVATQAQC;
+
+class PCDCache {
     constructor() {
         /** @type {Map<number, { positions: Float32Array, stride: number }>} */
         this.cache = new Map();
@@ -148,3 +151,6 @@ export class PCDCache {
         this.cache.clear();
     }
 }
+
+global.CVATQAQC.PCDCache = PCDCache;
+})(window);

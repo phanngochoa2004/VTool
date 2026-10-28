@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<title>CVAT QA/QC — Browser math tests</title>
+<style>
+body { margin: 24px; background: #111214; color: #f5f5f7; font: 13px system-ui; }
+pre { padding: 16px; border: 1px solid #343438; border-radius: 8px; background: #1c1c1e; white-space: pre-wrap; }
+</style>
+<h1>Browser math tests</h1>
+<pre id="output">Đang chạy…</pre>
+<script>
+const output = document.querySelector('#output');
+const lines = [];
+for (const method of ['log', 'warn', 'error']) {
+    const original = console[method].bind(console);
+    console[method] = (...args) => {
+        original(...args);
+        lines.push(args.map(String).join(' '));
+        output.textContent = lines.join('\n');
+    };
+}
+</script>
+<script src="../../src/config/version.js"></script>
+<script src="../../src/config/allowed_sites.js"></script>
+<script src="../../src/engine/math_3d.js"></script>
+<script src="../../src/engine/ortho_canvas.js"></script>
+<script src="../../src/core/pcd_cache.js"></script>
+<script src="../../src/core/track_reader.js"></script>
+<script src="../../src/core/cvat_hook.js"></script>
+<script src="../../src/core/size_clipboard.js"></script>
+<script src="../../src/core/hotkeys.js"></script>
+<script src="../../src/core/hotkeys_autostart.js"></script>
+<script src="../../src/ui/frame_card.js"></script>
+<script src="../../src/ui/macos_dock.js"></script>
+<script src="../test_math.js"></script>
+</html>

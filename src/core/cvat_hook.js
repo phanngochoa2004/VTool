@@ -4,9 +4,12 @@
  * Completely client-side and reactive.
  */
 
-import { isAllowedSite } from '../config/allowed_sites.js';
+(function registerCVATHook(global) {
+    'use strict';
 
-export class CVATHook {
+const { isAllowedSite } = global.CVATQAQC;
+
+class CVATHook {
     constructor() {
         this.store = null;
         this.jobInstance = null;
@@ -966,3 +969,6 @@ export class CVATHook {
         }
     }
 }
+
+global.CVATQAQC.CVATHook = CVATHook;
+})(window);

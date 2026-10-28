@@ -93,19 +93,17 @@ Thay đổi đi qua cơ chế chỉnh sửa và lịch sử của CVAT; dùng Un
 
 Sau khi cập nhật: Reload tiện ích trong `chrome://extensions`, rồi tải lại tab CVAT. Tắt tiện ích hotkey cũ nếu còn bật riêng để tránh hai bộ phím chạy cùng lúc.
 
-## Build và kiểm tra
+## Cập nhật và kiểm tra
 
-Yêu cầu Node.js. Sau khi sửa mã nguồn, chạy:
+Extension không cần Node.js và không có bước build. Manifest nạp trực tiếp các file trong `src/` và `content/injector.js` theo đúng thứ tự phụ thuộc.
 
-```sh
-node build.js
-node --test tests/test_hotkeys.cjs
-node tests/test_math.js
-```
+Sau khi sửa mã nguồn:
 
-`content/bundle.js` là file Chrome nạp trực tiếp, cần build lại khi thay đổi `src/` hoặc `content/injector.js`.
+1. Mở `chrome://extensions`.
+2. Bấm **Reload** trên extension.
+3. Nhấn `Ctrl+Shift+R` trong tab CVAT.
 
-Để kiểm tra bằng trình duyệt, chạy HTTP server local tại thư mục repo và mở `tests/fixtures/inspector_hotkeys.html`. Trang dùng các thành phần Inspector thật với dữ liệu thử nghiệm trong bộ nhớ, không có box nào được chọn trên canvas CVAT chính, và mô phỏng bộ phím cũ đã chạy trước.
+Để kiểm tra bằng trình duyệt, mở `tests/fixtures/inspector_hotkeys.html` và `tests/fixtures/math.html`. Hai trang chạy trực tiếp mã nguồn thật với dữ liệu trong bộ nhớ, không cần Node.js.
 
 ---
 

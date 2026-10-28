@@ -1,0 +1,38 @@
+# Test and coverage output
+coverage/
+
+# Logs
+*.log
+
+# Environment and local configuration
+.env
+.env.*
+!.env.example
+*.local
+
+# Temporary files and caches
+.cache/
+.tmp/
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Editor and IDE settings
+.idea/
+.vscode/
+*.code-workspace
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Packaged extension artifacts
+*.crx
+*.pem
+*.zip
+

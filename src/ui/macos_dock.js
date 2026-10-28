@@ -4,11 +4,12 @@
  * Features a minimal floating trigger button when closed so it never interferes with the workspace.
  */
 
-import { FrameCard } from './frame_card.js';
-import { SizeClipboard } from '../core/size_clipboard.js';
-import { TrackReader } from '../core/track_reader.js';
+(function registerMacOSDock(global) {
+    'use strict';
 
-export class MacOSDock {
+const { FrameCard, SizeClipboard, TrackReader } = global.CVATQAQC;
+
+class MacOSDock {
     /**
      * @param {Object} callbacks - { onJumpToFrame, onReload }
      */
@@ -44,6 +45,10 @@ export class MacOSDock {
         this.orderSelect = null;
         this.emptyState = null;
         this.emptyState = null;
+        this.helpDialog = null;
+        this.helpCloseBtn = null;
+        this.helpBtn = null;
+        this.helpPreviousFocus = null;
 
         this.initDOM();
         this.setupResizer();
@@ -128,8 +133,9 @@ export class MacOSDock {
 
         const versionBadge = document.createElement('span');
         versionBadge.className = 'cvat-qaqc-version-pill';
-        versionBadge.textContent = 'v1.2.0';
-        versionBadge.title = 'v1.2.0: 4-Corner Resizing Only (Edge resizing disabled)';
+        const buildVersion = window.__CVAT_QAQC_BUILD_VERSION__ || 'dev';
+        versionBadge.textContent = `v${buildVersion}`;
+        versionBadge.title = `v${buildVersion}: 4-Corner Resizing Only (Edge resizing disabled)`;
         versionBadge.style.cssText = 'font-size: 9.5px; background: rgba(10, 132, 255, 0.2); color: #0A84FF; padding: 1px 5px; border-radius: 4px; margin-left: 5px; font-weight: 600; border: 1px solid rgba(10, 132, 255, 0.4); letter-spacing: 0.3px;';
 
         title.appendChild(iconSvg);
@@ -260,8 +266,8 @@ export class MacOSDock {
         sizeSelect.title = 'Kích thước hiển thị các góc chiếu';
         [
             { val: 'compact', label: 'Size: Nhỏ' },
-            { val: 'medium', label: 'Size: Vừa', selected: true },
-            { val: 'large', label: 'Size: Lớn' }
+            { val: 'medium', label: 'Size: Vừa' },
+            { val: 'large', label: 'Size: Lớn', selected: true }
         ].forEach(({ val, label, selected }) => {
             const opt = document.createElement('option');
             opt.value = val;
@@ -332,6 +338,18 @@ export class MacOSDock {
         jumpBtn.title = 'Cuộn đến frame đang chọn trong CVAT';
         jumpBtn.addEventListener('click', () => this.scrollToActiveFrame());
 
+        // Help button: usage guide and complete keyboard shortcut reference
+        const helpBtn = document.createElement('button');
+        helpBtn.className = 'cvat-qaqc-btn cvat-qaqc-help-btn';
+        helpBtn.textContent = '?';
+        helpBtn.title = 'Hướng dẫn sử dụng và danh sách phím tắt';
+        helpBtn.setAttribute('aria-label', 'Mở hướng dẫn sử dụng và phím tắt');
+        helpBtn.setAttribute('aria-haspopup', 'dialog');
+        helpBtn.setAttribute('aria-expanded', 'false');
+        helpBtn.setAttribute('aria-controls', 'cvat-qaqc-help-dialog');
+        helpBtn.addEventListener('click', () => this.openHelp());
+        this.helpBtn = helpBtn;
+
         // Close / Hide Button (Collapses back to floating button)
         const hideBtn = document.createElement('button');
         hideBtn.className = 'cvat-qaqc-btn';
@@ -344,6 +362,7 @@ export class MacOSDock {
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
         rightGroup.appendChild(jumpBtn);
+        rightGroup.appendChild(helpBtn);
         rightGroup.appendChild(hideBtn);
 
         toolbar.appendChild(leftGroup);
@@ -372,8 +391,177 @@ export class MacOSDock {
 
         dock.appendChild(filmstrip);
 
+        const helpDialog = this.createHelpDialog();
+        dock.appendChild(helpDialog);
+
         this.dom = dock;
         document.body.appendChild(dock);
+    }
+
+    createHelpDialog() {
+        const create = (tag, className = '', text = '') => {
+            const element = document.createElement(tag);
+            if (className) element.className = className;
+            if (text) element.textContent = text;
+            return element;
+        };
+
+        const overlay = create('div', 'cvat-qaqc-help-overlay');
+        overlay.hidden = true;
+        overlay.setAttribute('aria-hidden', 'true');
+        overlay.addEventListener('pointerdown', (event) => {
+            if (event.target === overlay) this.closeHelp();
+        });
+        overlay.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                this.closeHelp();
+                return;
+            }
+            if (event.key === 'Tab') {
+                const focusable = [...overlay.querySelectorAll('button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])')]
+                    .filter((element) => element.getClientRects().length > 0);
+                if (!focusable.length) return;
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (event.shiftKey && document.activeElement === first) {
+                    event.preventDefault();
+                    last.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                    event.preventDefault();
+                    first.focus();
+                }
+            }
+        });
+
+        const panel = create('section', 'cvat-qaqc-help-panel');
+        panel.id = 'cvat-qaqc-help-dialog';
+        panel.setAttribute('role', 'dialog');
+        panel.setAttribute('aria-modal', 'true');
+        panel.setAttribute('aria-labelledby', 'cvat-qaqc-help-title');
+
+        const header = create('header', 'cvat-qaqc-help-header');
+        const headingGroup = create('div', 'cvat-qaqc-help-heading-group');
+        const eyebrow = create('span', 'cvat-qaqc-help-eyebrow', 'TRỢ GIÚP');
+        const title = create('h2', 'cvat-qaqc-help-title', '3D QA/QC Inspector');
+        title.id = 'cvat-qaqc-help-title';
+        const subtitle = create('p', 'cvat-qaqc-help-subtitle', 'Chỉnh cuboid trong RAM của CVAT. Bấm Save trên CVAT để lưu lên server.');
+        headingGroup.appendChild(eyebrow);
+        headingGroup.appendChild(title);
+        headingGroup.appendChild(subtitle);
+
+        const closeBtn = create('button', 'cvat-qaqc-help-close', 'Đóng');
+        closeBtn.type = 'button';
+        closeBtn.title = 'Đóng hướng dẫn (Esc)';
+        closeBtn.setAttribute('aria-label', 'Đóng hướng dẫn');
+        closeBtn.addEventListener('click', () => this.closeHelp());
+        this.helpCloseBtn = closeBtn;
+
+        header.appendChild(headingGroup);
+        header.appendChild(closeBtn);
+        panel.appendChild(header);
+
+        const body = create('div', 'cvat-qaqc-help-body');
+        body.setAttribute('role', 'document');
+
+        const addSection = (sectionTitle, rows) => {
+            const section = create('section', 'cvat-qaqc-help-section');
+            section.appendChild(create('h3', 'cvat-qaqc-help-section-title', sectionTitle));
+            const grid = create('div', 'cvat-qaqc-help-grid');
+            for (const [keys, description] of rows) {
+                const keyCell = create('div', 'cvat-qaqc-help-keys');
+                for (const key of keys) keyCell.appendChild(create('kbd', '', key));
+                grid.appendChild(keyCell);
+                grid.appendChild(create('div', 'cvat-qaqc-help-description', description));
+            }
+            section.appendChild(grid);
+            body.appendChild(section);
+        };
+
+        addSection('Bắt đầu', [
+            [['1'], 'Chọn một cuboid hoặc Track trong CVAT.'],
+            [['2'], 'Bấm nút 3D hoặc Alt+Q để mở Inspector.'],
+            [['3'], 'Trỏ chuột hoặc focus vào card frame cần sửa.'],
+            [['4'], 'Chỉnh box, kiểm tra ba góc nhìn, rồi bấm Save trên CVAT.']
+        ]);
+
+        addSection('Thao tác chuột và card', [
+            [['Kéo box'], 'Dịch vị trí theo mặt Top, Side hoặc Front.'],
+            [['Kéo góc đỏ'], 'Đổi hai kích thước; giữ nguyên góc đối diện.'],
+            [['Kéo chấm xanh'], 'Xoay Yaw trên mặt Top.'],
+            [['↺ / ↻'], 'Xoay Yaw, Pitch hoặc Roll theo nút trên từng góc nhìn.'],
+            [['Jump'], 'Chuyển player CVAT đến frame của card.'],
+            [['Copy / Dán'], 'Sao chép hoặc áp dụng W × L × H cho frame.'],
+            [['Cố định All'], 'Áp dụng kích thước hiện tại cho keyframe toàn Track.'],
+            [['Outside'], 'Bật hoặc tắt trạng thái Outside của frame.']
+        ]);
+
+        addSection('Mở panel và lịch sử', [
+            [['Alt', 'Q'], 'Mở hoặc ẩn Inspector.'],
+            [['Alt', 'Shift', 'C'], 'Copy kích thước card active.'],
+            [['Alt', 'Shift', 'V'], 'Dán kích thước vào card active.'],
+            [['O'], 'Bật hoặc tắt Outside của card đang trỏ hoặc frame active.'],
+            [['Ctrl/Cmd', 'Z'], 'Undo card đang trỏ; nếu hết lịch sử thì Undo CVAT.'],
+            [['Ctrl/Cmd', 'Shift', 'Z'], 'Redo card đang trỏ; nếu hết lịch sử thì Redo CVAT.'],
+            [['Ctrl', 'Y'], 'Redo card đang trỏ hoặc Redo CVAT.']
+        ]);
+
+        addSection('Dịch chuyển và đổi một mặt', [
+            [['← / →'], 'Tiến hoặc lùi 4 cm theo hướng box.'],
+            [['↑ / ↓'], 'Nâng hoặc hạ box 4 cm.'],
+            [['Num 1 / Num 2'], 'Dịch ngang phải hoặc trái 4 cm.'],
+            [['Shift', '← / →'], 'Nới mặt trước hoặc thu mặt sau 6 cm.'],
+            [['Shift', '↑ / ↓'], 'Nới mặt trên hoặc thu mặt dưới 6 cm.'],
+            [['Shift', 'Num 1 / Num 2'], 'Nới mặt phải hoặc thu mặt trái 6 cm.']
+        ]);
+
+        addSection('Xoay và kích thước mẫu', [
+            [['Q / W'], 'Xoay trái hoặc phải 2° quanh trục Z point cloud.'],
+            [['E / R'], 'Xoay trái hoặc phải 2° quanh trục Y cục bộ.'],
+            [['Num 4 / Num 5'], 'Nghiêng ngang phải hoặc trái 3° quanh trục X cục bộ.'],
+            [['Z'], 'Xoay trái 90° quanh trục Z point cloud.'],
+            [['X'], 'Xoay 90° cục bộ và đổi chiều dài/rộng.'],
+            [['1'], 'Kích thước Sedan: 4.5 × 1.85 × 1.5 m.'],
+            [['2'], 'Kích thước SUV: 4.7 × 1.95 × 1.65 m.'],
+            [['3'], 'Kích thước xe máy: 1.85 × 0.8 × 1.5 m.'],
+            [['4'], 'Kích thước người đi bộ: 0.6 × 0.6 × 1.7 m.']
+        ]);
+
+        addSection('Toàn Track và bố cục', [
+            [['G'], 'Đồng bộ kích thước card đang trỏ sang mọi keyframe cùng Track.'],
+            [['Shift', 'G'], 'Khôi phục lần đồng bộ kích thước gần nhất trong phiên.'],
+            [['P'], 'Bật hoặc tắt Outside trên toàn bộ keyframe cùng Track.'],
+            [['Shift', 'P'], 'Khôi phục lần Outside toàn Track gần nhất trong phiên.'],
+            [['Alt', 'T'], 'Sắp xếp 3D trái, Top trên phải, Side/Front dưới phải.']
+        ]);
+
+        const note = create('p', 'cvat-qaqc-help-note', 'Phím chỉnh box không tự lặp khi giữ. Phím bị khóa khi đang nhập liệu, mở hộp thoại, kéo chuột hoặc box không thể chỉnh sửa.');
+        body.appendChild(note);
+        panel.appendChild(body);
+        overlay.appendChild(panel);
+        this.helpDialog = overlay;
+        return overlay;
+    }
+
+    openHelp() {
+        if (!this.helpDialog) return;
+        this.helpPreviousFocus = document.activeElement;
+        this.helpDialog.hidden = false;
+        this.helpDialog.setAttribute('aria-hidden', 'false');
+        this.helpBtn?.setAttribute('aria-expanded', 'true');
+        requestAnimationFrame(() => this.helpCloseBtn?.focus({ preventScroll: true }));
+    }
+
+    closeHelp() {
+        if (!this.helpDialog || this.helpDialog.hidden) return;
+        this.helpDialog.hidden = true;
+        this.helpDialog.setAttribute('aria-hidden', 'true');
+        this.helpBtn?.setAttribute('aria-expanded', 'false');
+        if (this.helpPreviousFocus?.isConnected) {
+            this.helpPreviousFocus.focus({ preventScroll: true });
+        }
+        this.helpPreviousFocus = null;
     }
 
     updateToolbarRotateButtons() {
@@ -627,6 +815,7 @@ export class MacOSDock {
     }
 
     close() {
+        this.closeHelp();
         this.isOpen = false;
         this.dom.classList.remove('open');
         this.triggerEl.style.display = 'flex'; // Restore trigger button
@@ -931,3 +1120,6 @@ export class MacOSDock {
         }
     }
 }
+
+global.CVATQAQC.MacOSDock = MacOSDock;
+})(window);

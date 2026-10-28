@@ -14,7 +14,10 @@
  *    '*.vantixapps.net'
  */
 
-export const ALLOWED_SITES = [
+(function registerAllowedSites(global) {
+    'use strict';
+
+const ALLOWED_SITES = [
     // Local CVAT Server instances (mặc định của CVAT là port 8080)
     'http://localhost:8080',
     'http://127.0.0.1:8080',
@@ -42,7 +45,7 @@ export const ALLOWED_SITES = [
  * @param {Location|string} [target] - window.location hoặc chuỗi URL cần kiểm tra
  * @returns {boolean}
  */
-export function isAllowedSite(target) {
+function isAllowedSite(target) {
     let currentOrigin = '';
     let currentHref = '';
     let currentHost = '';
@@ -123,3 +126,6 @@ export function isAllowedSite(target) {
 
     return false;
 }
+
+Object.assign(global.CVATQAQC, { ALLOWED_SITES, isAllowedSite });
+})(window);

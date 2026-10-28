@@ -7,6 +7,9 @@
  * Sized compactly with clean, unobtrusive CVAT-style heading cues (green rotation helper dot).
  */
 
+(function registerOrthoCanvasRenderer(global) {
+    'use strict';
+
 // 32-level precomputed depth color palette to eliminate string allocation on every frame
 const PALETTE_SIZE = 32;
 const DEPTH_PALETTE = new Array(PALETTE_SIZE);
@@ -18,7 +21,7 @@ for (let i = 0; i < PALETTE_SIZE; i++) {
     DEPTH_PALETTE[i] = `rgb(${r},${g},${b})`;
 }
 
-export class OrthoCanvasRenderer {
+class OrthoCanvasRenderer {
     /**
      * Compute projection metrics, scale, and layout coordinates for rendering & hit testing
      * @param {HTMLCanvasElement} canvas
@@ -666,3 +669,6 @@ export class OrthoCanvasRenderer {
         return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
     }
 }
+
+global.CVATQAQC.OrthoCanvasRenderer = OrthoCanvasRenderer;
+})(window);

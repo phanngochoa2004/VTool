@@ -13,9 +13,12 @@
  * Shift+P: khôi phục trạng thái Outside trước lần P gần nhất.
  * Alt+T: bố cục 3D trái, Top phải trên, Side/Front phải dưới; thu gọn bảng ID.
  */
-import { Math3D } from '../engine/math_3d.js';
+(function registerHotkeys(global) {
+    'use strict';
 
-export function install3DHotkeys({ getInspectorTarget } = {}) {
+const { Math3D } = global.CVATQAQC;
+
+function install3DHotkeys({ getInspectorTarget } = {}) {
     const config = {
         // Dài (X), Rộng (Y), Cao (Z); cùng đơn vị với point cloud.
         presets: {
@@ -730,5 +733,7 @@ export function install3DHotkeys({ getInspectorTarget } = {}) {
             console.info('[CVAT 3D] Đã tắt phím tắt.');
         },
     };
-    report('Đã bật: Alt+T bố cục | Mũi tên/Num1/2 dịch 4 cm; +Shift nới/thu một mặt 6 cm | Q/W xoay ngang; E/R xoay Side | Num4/5 nghiêng 3° | Z/X xoay 90° | G/P cả track; Shift+G/P khôi phục | 1–4 mẫu');
 }
+
+global.CVATQAQC.install3DHotkeys = install3DHotkeys;
+})(window);
