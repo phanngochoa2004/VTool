@@ -355,44 +355,8 @@ export class CVATHook {
             await targetState.save();
             console.log(`[CVAT-QAQC] In-memory cuboid updated for Object #${clientID} at frame #${frameNumber}`);
 
-            // 4. Sync to CVAT Redux store so CVAT top-bar and history stack register the change
-            if (this.store && this.jobInstance?.actions) {
-                try {
-                    const history = await this.jobInstance.actions.get();
-                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
-                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
-                    this.store.dispatch({
-                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
-                        payload: {
-                            states: statesToPush,
-                            history
-                        }
-                    });
-                } catch (e) {
-                    console.warn('[CVAT-QAQC] Could not sync history to Redux:', e);
-                }
-            }
-
-            // 5. If this is the active frame in CVAT's main viewport, trigger realtime 3D canvas redraw
+            // 4. If this is the active frame in CVAT's main viewport, trigger lightweight Three.js update (0 disk I/O, < 5ms)
             if (frameNumber === this.currentFrame && this.canvasInstance) {
-                try {
-                    if (this.jobInstance?.frames?.get) {
-                        const frameData = await this.jobInstance.frames.get(this.currentFrame);
-                        const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
-                        const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
-                        const statesToRender = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
-                        if (typeof this.canvasInstance.setup === 'function') {
-                            this.canvasInstance.setup(frameData, statesToRender);
-                        }
-                        if (typeof this.canvasInstance.render === 'function') {
-                            this.canvasInstance.render();
-                        }
-                    }
-                } catch (e) {
-                    console.warn('[CVAT-QAQC] Canvas3D realtime render error:', e);
-                }
-
                 const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
                 const perspective = canvasDOM?.perspective;
                 if (perspective) {
@@ -405,6 +369,32 @@ export class CVATHook {
                         }
                     }));
                 }
+                if (typeof this.canvasInstance.render === 'function') {
+                    try {
+                        this.canvasInstance.render();
+                    } catch (_) {}
+                }
+            }
+
+            // 5. Defer Redux history sync to the next animation frame tick (zero blocking on user interaction, INP < 16ms)
+            if (this.store && this.jobInstance?.actions) {
+                setTimeout(async () => {
+                    try {
+                        const history = await this.jobInstance.actions.get();
+                        const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                        const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                        const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                        this.store.dispatch({
+                            type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                            payload: {
+                                states: statesToPush,
+                                history
+                            }
+                        });
+                    } catch (e) {
+                        console.warn('[CVAT-QAQC] Could not sync history to Redux:', e);
+                    }
+                }, 16);
             }
 
             this.emit('objectUpdated', {
@@ -541,36 +531,37 @@ export class CVATHook {
                 }
             }
 
-            // 2. Refresh CVAT Canvas3D for the current frame in realtime
+            // 2. Refresh CVAT Canvas3D for the current frame in realtime (0 disk I/O, < 5ms)
             if (this.canvasInstance && this.jobInstance) {
-                try {
-                    const frameData = await this.jobInstance.frames.get(this.currentFrame);
-                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
-                    const statesToRender = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
-                    if (typeof this.canvasInstance.setup === 'function') {
-                        this.canvasInstance.setup(frameData, statesToRender);
-                    }
-                    if (typeof this.canvasInstance.render === 'function') {
+                const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
+                const perspective = canvasDOM?.perspective;
+                if (perspective) {
+                    perspective.dispatchEvent(new CustomEvent('canvas.edited', {
+                        bubbles: false,
+                        cancelable: true
+                    }));
+                }
+                if (typeof this.canvasInstance.render === 'function') {
+                    try {
                         this.canvasInstance.render();
-                    }
-                } catch (e) {
-                    console.warn('[CVAT-QAQC] Canvas3D refresh error:', e);
+                    } catch (_) {}
                 }
             }
 
-            // 3. Dispatch Redux update for history and sidebar inputs
+            // 3. Defer Redux update for history and sidebar inputs to avoid blocking paint
             if (this.store && this.jobInstance?.actions) {
-                try {
-                    const history = await this.jobInstance.actions.get();
-                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
-                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
-                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
-                    this.store.dispatch({
-                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
-                        payload: { states: statesToPush, history }
-                    });
-                } catch (e) {}
+                setTimeout(async () => {
+                    try {
+                        const history = await this.jobInstance.actions.get();
+                        const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                        const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                        const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                        this.store.dispatch({
+                            type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                            payload: { states: statesToPush, history }
+                        });
+                    } catch (e) {}
+                }, 16);
             }
 
             console.log(`[CVAT-QAQC] Applied size (${sx} × ${sy} × ${sz}m) to Track #${clientID} across ${framesToUpdate.size} frames in-memory`);

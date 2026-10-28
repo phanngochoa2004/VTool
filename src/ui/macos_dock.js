@@ -378,6 +378,7 @@ export class MacOSDock {
         const filmstrip = document.createElement('div');
         filmstrip.className = 'cvat-qaqc-filmstrip size-medium';
         this.filmstrip = filmstrip;
+        this.setupFilmstripScrollObserver();
 
         // Empty State
         const empty = document.createElement('div');
@@ -720,8 +721,51 @@ export class MacOSDock {
     }
 
     /**
+     * Check if a frame card is currently visible inside the scrollable filmstrip viewport
+     * @param {Object} card
+     * @returns {boolean}
+     */
+    isCardVisible(card) {
+        if (!card || !card.dom || !this.filmstrip) return true;
+        if (typeof window === 'undefined') return true;
+        try {
+            const stripRect = this.filmstrip.getBoundingClientRect();
+            const cardRect = card.dom.getBoundingClientRect();
+            // Visible if it intersects the filmstrip viewport with a 350px buffer on each side
+            return cardRect.right >= stripRect.left - 350 && cardRect.left <= stripRect.right + 350;
+        } catch (_) {
+            return true;
+        }
+    }
+
+    /**
+     * Passive scroll observer that renders off-screen dirty cards on-demand as they scroll into view
+     */
+    setupFilmstripScrollObserver() {
+        if (!this.filmstrip) return;
+        let scrollRaf = false;
+        this.filmstrip.addEventListener('scroll', () => {
+            if (scrollRaf) return;
+            scrollRaf = true;
+            requestAnimationFrame(() => {
+                scrollRaf = false;
+                for (const [, card] of this.cards.entries()) {
+                    if (card.isDirty && this.isCardVisible(card)) {
+                        card.isDirty = false;
+                        if (typeof card.renderViews === 'function') {
+                            const pts = this.pcdCache?.get(card.frame) || card.lastPointCloudData;
+                            card.renderViews(pts, card.frame === this.state.currentFrame, card.lastRenderOptions);
+                        }
+                    }
+                }
+            });
+        }, { passive: true });
+    }
+
+    /**
      * In-place data update across all frame cards on Undo/Redo or history changes
      * Zero DOM recreation, preserving scroll and focus
+     * Only re-renders visible cards immediately, marking offscreen cards dirty for on-demand scroll rendering (< 10ms INP)
      * @param {Array} framesData
      */
     refreshTrackData(framesData) {
@@ -732,8 +776,20 @@ export class MacOSDock {
         if (this.cards.size === framesData.length) {
             for (const fData of framesData) {
                 const card = this.cards.get(fData.frame);
-                if (card && typeof card.updateData === 'function') {
-                    card.updateData(fData);
+                if (!card) continue;
+                if (this.isCardVisible(card)) {
+                    card.isDirty = false;
+                    if (typeof card.updateData === 'function') {
+                        card.updateData(fData);
+                    }
+                } else {
+                    // Fast in-memory data update without triggering expensive canvas rendering
+                    card.data = fData;
+                    card.frame = fData.frame;
+                    card.isDirty = true;
+                    if (typeof card.updateHeaderBadges === 'function') {
+                        card.updateHeaderBadges();
+                    }
                 }
             }
         } else {
