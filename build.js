@@ -12,6 +12,8 @@ const files = [
     path.join(srcDir, 'core', 'track_reader.js'),
     path.join(srcDir, 'core', 'cvat_hook.js'),
     path.join(srcDir, 'core', 'size_clipboard.js'),
+    path.join(srcDir, 'core', 'hotkeys.js'),
+    path.join(srcDir, 'core', 'hotkeys_autostart.js'),
     path.join(srcDir, 'ui', 'frame_card.js'),
     path.join(srcDir, 'ui', 'macos_dock.js'),
     path.join(contentDir, 'injector.js')
@@ -34,7 +36,8 @@ let bundleCode = `/**
 `;
 
 for (const f of files) {
-    let content = fs.readFileSync(f, 'utf8');
+    // Normalize Windows checkouts before stripping modules so the bundle is reproducible.
+    let content = fs.readFileSync(f, 'utf8').replace(/\r\n?/g, '\n');
 
     // Strip ES module imports
     content = content.replace(/^\s*import\s+[^;]+;\s*$/gm, '');
@@ -44,7 +47,7 @@ for (const f of files) {
     content = content.replace(/^\s*export\s+/gm, '');
 
     bundleCode += `\n    // ------------------------------------------\n`;
-    bundleCode += `    // File: ${path.relative(__dirname, f).replace(/\\\\/g, '/')}\n`;
+    bundleCode += `    // File: ${path.relative(__dirname, f).split(path.sep).join('/')}\n`;
     bundleCode += `    // ------------------------------------------\n\n`;
     bundleCode += content + '\n';
 }

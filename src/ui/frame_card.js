@@ -57,6 +57,15 @@ export class FrameCard {
         const card = document.createElement('div');
         card.className = 'cvat-qaqc-card';
         card.dataset.frame = String(this.frame);
+        card.tabIndex = 0;
+        const activate = () => this.options.onActivate?.(this.frame);
+        card.addEventListener('pointerdown', (event) => {
+            activate();
+            if (!event.target.closest('button,input,textarea,select,canvas,[contenteditable="true"]')) {
+                card.focus({ preventScroll: true });
+            }
+        }, true);
+        card.addEventListener('focusin', activate);
 
         card.addEventListener('mouseenter', () => {
             if (typeof this.onHover === 'function') {
@@ -227,6 +236,8 @@ export class FrameCard {
             cellHeader.appendChild(rotGroup);
 
             const canvas = document.createElement('canvas');
+            canvas.tabIndex = 0;
+            canvas.setAttribute('aria-label', `${viewType} — Frame ${this.frame}. Phím tắt chỉnh box đang trỏ hoặc focus.`);
             canvas.width = 220;
             canvas.height = 110;
             this.canvases[viewType] = canvas;
@@ -799,6 +810,7 @@ export class FrameCard {
         });
 
         canvas.addEventListener('pointerdown', (e) => {
+            canvas.focus({ preventScroll: true });
             if (e.button !== 0 || this.data.outside) return; // Only primary mouse button and not outside
 
             const pos = getCanvasPos(e);
