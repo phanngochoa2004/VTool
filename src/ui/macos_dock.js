@@ -418,16 +418,35 @@ export class MacOSDock {
     getHotkeyTarget(event) {
         if (!this.isOpen) return null;
         const target = event?.composedPath?.()[0] || event?.target;
+
+        // 1. Hovered card has highest priority (user mouse is pointing directly at this card)
+        const hoveredCard = this.dom?.querySelector?.('.cvat-qaqc-card:hover');
+        const hoveredFrame = hoveredCard ? Number(hoveredCard.dataset.frame) :
+            (this.hoveredFrame !== null && this.hoveredFrame !== undefined ? Number(this.hoveredFrame) : null);
+
+        // 2. Focused card (user focused card or input/canvas inside card via keyboard)
+        const focusedCard = document.activeElement?.closest?.('.cvat-qaqc-card');
+
+        // 3. Direct event card (composedPath or target originates from a card)
         const eventCard = target?.closest?.('.cvat-qaqc-card');
-        const focused = document.activeElement?.closest?.('.cvat-qaqc-card');
-        const hovered = this.dom?.querySelector?.('.cvat-qaqc-card:hover');
+
+        // 4. Panel check
         const inPanel = target?.closest?.('.cvat-qaqc-dock') ||
             document.activeElement?.closest?.('.cvat-qaqc-dock') || this.dom?.matches?.(':hover');
-        const frame = eventCard ? Number(eventCard.dataset.frame) :
-            hovered ? Number(hovered.dataset.frame) :
-            focused ? Number(focused.dataset.frame) :
-            this.hoveredFrame ?? (inPanel ? this.hotkeyFrame ?? this.state.currentFrame : null);
-        if (frame === null) return null;
+
+        let frame = null;
+        if (hoveredFrame !== null && !isNaN(hoveredFrame) && this.cards.has(hoveredFrame)) {
+            frame = hoveredFrame;
+        } else if (focusedCard && !isNaN(Number(focusedCard.dataset.frame)) && this.cards.has(Number(focusedCard.dataset.frame))) {
+            frame = Number(focusedCard.dataset.frame);
+        } else if (eventCard && !isNaN(Number(eventCard.dataset.frame)) && this.cards.has(Number(eventCard.dataset.frame))) {
+            frame = Number(eventCard.dataset.frame);
+        } else if (inPanel) {
+            frame = (this.hotkeyFrame !== null && this.cards.has(this.hotkeyFrame)) ? this.hotkeyFrame :
+                (this.cards.has(this.state.currentFrame) ? this.state.currentFrame : null);
+        }
+
+        if (frame === null || !this.cards.has(frame)) return null;
         const card = this.cards.get(frame);
         const clientID = this.state.activeClientID;
         if (!card?.dom?.isConnected || clientID === null || clientID === undefined) return null;
@@ -766,6 +785,7 @@ export class MacOSDock {
                 },
                 (frame, isHovered) => {
                     this.hoveredFrame = isHovered ? frame : (this.hoveredFrame === frame ? null : this.hoveredFrame);
+                    if (isHovered) this.hotkeyFrame = frame;
                 },
                 { viewOrder: this.state.viewOrder, onActivate: (frame) => { this.hotkeyFrame = frame; } }
             );

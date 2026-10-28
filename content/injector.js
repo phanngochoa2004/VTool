@@ -134,32 +134,31 @@ import { start3DHotkeysAutostart } from '../src/core/hotkeys_autostart.js';
             return states.find((state) => state.clientID === clientID);
         },
         onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
-            // Persist first so a failed edit never enters the inspector's interpolation cache.
+            // Persist to CVAT in-memory AnnotationsCollection and sync Redux for this specific frame only
             const saved = await hook.updateObjectCuboid(frame, clientID, newPoints);
             if (!saved) return false;
 
-            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
-            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints, null);
-            if (updatedFrames && updatedFrames.length > 0) {
-                currentTrackFrames = updatedFrames;
-                if (typeof dock.refreshTrackData === 'function') {
-                    dock.refreshTrackData(updatedFrames);
-                } else if (typeof dock.updateFramesData === 'function') {
-                    dock.updateFramesData(updatedFrames);
+            // Keep internal track keyframe cache updated without overwriting sibling cards in the filmstrip
+            if (TrackReader.currentTrackData && TrackReader.currentTrackData.clientID === clientID) {
+                const shapes = TrackReader.currentTrackData.shapes;
+                const existing = shapes?.find(s => s.frame === frame);
+                if (existing) {
+                    existing.points = [...newPoints];
+                } else if (shapes) {
+                    shapes.push({ frame, points: [...newPoints], outside: false, rotation: 0 });
+                    shapes.sort((a, b) => a.frame - b.frame);
                 }
             }
 
             return true;
         },
         onUpdateOutside: async (frame, clientID, outside) => {
-            // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
-            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, null, outside);
-            if (updatedFrames && updatedFrames.length > 0) {
-                currentTrackFrames = updatedFrames;
-                if (typeof dock.refreshTrackData === 'function') {
-                    dock.refreshTrackData(updatedFrames);
-                } else if (typeof dock.updateFramesData === 'function') {
-                    dock.updateFramesData(updatedFrames);
+            // Keep internal track keyframe cache updated for this specific frame only
+            if (TrackReader.currentTrackData && TrackReader.currentTrackData.clientID === clientID) {
+                const shapes = TrackReader.currentTrackData.shapes;
+                const existing = shapes?.find(s => s.frame === frame);
+                if (existing) {
+                    existing.outside = !!outside;
                 }
             }
 
