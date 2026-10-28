@@ -858,6 +858,35 @@
   transform: scale(0.97);
 }
 
+/* Card History (Undo / Redo) Buttons */
+.cvat-qaqc-history-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.cvat-qaqc-undo-btn,
+.cvat-qaqc-redo-btn {
+  padding: 0 5px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.cvat-qaqc-undo-btn:disabled,
+.cvat-qaqc-redo-btn:disabled {
+  opacity: 0.28;
+  cursor: default;
+  pointer-events: none;
+}
+
+.cvat-qaqc-undo-btn:not(:disabled):hover,
+.cvat-qaqc-redo-btn:not(:disabled):hover {
+  color: #0A84FF;
+  border-color: rgba(10, 132, 255, 0.4);
+  background: rgba(10, 132, 255, 0.15);
+}
+
 .cvat-qaqc-copy-size-btn:hover {
   color: #30D158;
   border-color: rgba(48, 209, 88, 0.4);

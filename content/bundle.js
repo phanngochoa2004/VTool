@@ -2885,6 +2885,13 @@ class FrameCard {
         this.hoverState = null;
         this.rafPending = false;
 
+        // Per-frame localized Undo / Redo history stack
+        this.undoStack = [];
+        this.redoStack = [];
+        this.maxHistory = 30;
+        this.undoBtn = null;
+        this.redoBtn = null;
+
         this.dom = this.createDOM();
     }
 
@@ -2962,6 +2969,35 @@ class FrameCard {
         const rightGroup = document.createElement('div');
         rightGroup.className = 'cvat-qaqc-card-right-group';
 
+        // Local Per-Frame Undo / Redo Group
+        const historyGroup = document.createElement('div');
+        historyGroup.className = 'cvat-qaqc-history-group';
+
+        const undoBtn = document.createElement('button');
+        undoBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-undo-btn';
+        undoBtn.textContent = '↶';
+        undoBtn.title = `Hoàn tác (Undo) frame ${this.frame} (Ctrl+Z)`;
+        undoBtn.disabled = true;
+        undoBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.undo();
+        });
+        this.undoBtn = undoBtn;
+
+        const redoBtn = document.createElement('button');
+        redoBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-redo-btn';
+        redoBtn.textContent = '↷';
+        redoBtn.title = `Làm lại (Redo) frame ${this.frame} (Ctrl+Y)`;
+        redoBtn.disabled = true;
+        redoBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.redo();
+        });
+        this.redoBtn = redoBtn;
+
+        historyGroup.appendChild(undoBtn);
+        historyGroup.appendChild(redoBtn);
+
         // Outside Toggle Button
         const outsideBtn = document.createElement('button');
         outsideBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-outside-toggle-btn';
@@ -3013,6 +3049,7 @@ class FrameCard {
             this.triggerJump();
         });
 
+        rightGroup.appendChild(historyGroup);
         rightGroup.appendChild(outsideBtn);
         rightGroup.appendChild(copyBtn);
         rightGroup.appendChild(pasteBtn);
@@ -3116,6 +3153,8 @@ class FrameCard {
     rotateView(viewType, deltaRad) {
         if (!this.data.box) return;
 
+        this.pushUndoSnapshot(this.takeSnapshot());
+
         // Perform authentic 3D local-axis rotation matching Three.js / CVAT canvas3d
         const newAngles = Math3D.rotateLocal(this.data.box, viewType, deltaRad);
         this.data.box.rx = newAngles.rx;
@@ -3165,6 +3204,104 @@ class FrameCard {
         return group;
     }
 
+    /**
+     * Capture immutable snapshot of current state for localized undo/redo
+     */
+    takeSnapshot() {
+        return {
+            box: { ...(this.data.box || {}) },
+            points: Array.isArray(this.data.points) ? [...this.data.points] : [],
+            outside: !!this.data.outside,
+            keyframe: !!this.data.keyframe
+        };
+    }
+
+    /**
+     * Push snapshot into card's local undo stack and clear redo stack
+     * @param {Object} snap
+     */
+    pushUndoSnapshot(snap) {
+        if (!snap) return;
+        this.undoStack.push(snap);
+        if (this.undoStack.length > this.maxHistory) {
+            this.undoStack.shift();
+        }
+        this.redoStack = []; // New user edit invalidates redo stack
+        this.updateUndoRedoButtons();
+    }
+
+    /**
+     * Update state and tooltip text of Undo / Redo buttons
+     */
+    updateUndoRedoButtons() {
+        if (this.undoBtn) {
+            this.undoBtn.disabled = this.undoStack.length === 0;
+            this.undoBtn.title = this.undoStack.length > 0
+                ? `Hoàn tác (Undo) frame ${this.frame} (${this.undoStack.length} bước - Ctrl+Z)`
+                : `Không có thao tác nào để hoàn tác trên frame ${this.frame}`;
+        }
+        if (this.redoBtn) {
+            this.redoBtn.disabled = this.redoStack.length === 0;
+            this.redoBtn.title = this.redoStack.length > 0
+                ? `Làm lại (Redo) frame ${this.frame} (${this.redoStack.length} bước - Ctrl+Y)`
+                : `Không có thao tác nào để làm lại trên frame ${this.frame}`;
+        }
+    }
+
+    /**
+     * Restore previous state on this specific frame
+     * @returns {boolean}
+     */
+    undo() {
+        if (this.undoStack.length === 0) return false;
+        const currentSnap = this.takeSnapshot();
+        const prevSnap = this.undoStack.pop();
+        this.redoStack.push(currentSnap);
+        if (this.redoStack.length > this.maxHistory) {
+            this.redoStack.shift();
+        }
+
+        this.restoreSnapshot(prevSnap);
+        this.updateUndoRedoButtons();
+        return true;
+    }
+
+    /**
+     * Re-apply undone state on this specific frame
+     * @returns {boolean}
+     */
+    redo() {
+        if (this.redoStack.length === 0) return false;
+        const currentSnap = this.takeSnapshot();
+        const nextSnap = this.redoStack.pop();
+        this.undoStack.push(currentSnap);
+        if (this.undoStack.length > this.maxHistory) {
+            this.undoStack.shift();
+        }
+
+        this.restoreSnapshot(nextSnap);
+        this.updateUndoRedoButtons();
+        return true;
+    }
+
+    /**
+     * Apply snapshot back into this card and sync in-place to CVAT
+     * @param {Object} snap
+     */
+    restoreSnapshot(snap) {
+        if (!snap) return;
+        this.data.box = { ...(snap.box || {}) };
+        this.data.points = Array.isArray(snap.points) ? [...snap.points] : [];
+        this.data.outside = !!snap.outside;
+        this.data.keyframe = !!snap.keyframe;
+
+        this.applyBoxChanges();
+
+        if (typeof this.onToggleOutside === 'function') {
+            this.onToggleOutside(this.frame, this.data.outside);
+        }
+    }
+
     applyBoxChanges() {
         this.data.points = TrackReader.boxToPoints(this.data.box, this.data.points);
         this.data.keyframe = true; // Editing an interpolated frame promotes it to a keyframe
@@ -3181,6 +3318,7 @@ class FrameCard {
     }
 
     resetToOriginal() {
+        this.pushUndoSnapshot(this.takeSnapshot());
         this.data.box = { ...this.originalBox };
         this.data.points = [...this.originalPoints];
         this.applyBoxChanges();
@@ -3271,6 +3409,8 @@ class FrameCard {
             return false;
         }
 
+        this.pushUndoSnapshot(this.takeSnapshot());
+
         if (!this.data.box) this.data.box = {};
         this.data.box.sx = parseFloat(sx.toFixed(3));
         this.data.box.sy = parseFloat(sy.toFixed(3));
@@ -3310,6 +3450,7 @@ class FrameCard {
      * Toggle outside flag for this frame card
      */
     toggleOutside() {
+        this.pushUndoSnapshot(this.takeSnapshot());
         this.data.outside = !this.data.outside;
         this.updateHeaderBadges();
 
@@ -3694,6 +3835,7 @@ class FrameCard {
                 initialBox,
                 initialMetrics,
                 initialLocalPoints: this.lastRenderLocalPoints || null,
+                snapshotBeforeDrag: this.takeSnapshot(),
                 startX: pos.x,
                 startY: pos.y,
                 lastX: pos.x,
@@ -3716,10 +3858,12 @@ class FrameCard {
             } catch (_) {}
 
             const hadMoved = this.dragState.hasMoved;
+            const snap = this.dragState.snapshotBeforeDrag;
             this.dragState = null;
             canvas.style.cursor = 'default';
 
             if (hadMoved) {
+                this.pushUndoSnapshot(snap);
                 this.applyBoxChanges();
             } else {
                 this.requestRender();
@@ -4290,8 +4434,17 @@ class MacOSDock {
 
             // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
             if (isCtrlOrCmd && !e.altKey) {
+                const targetFrame = this.hoveredFrame !== null ? this.hoveredFrame : this.state.currentFrame;
+                const targetCard = this.cards.get(targetFrame);
+
                 if ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
-                    // Undo directly on CVAT & UI
+                    // Local Frame Undo has top priority when hovering or focused on a card
+                    if (targetCard && targetCard.undo()) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                    }
+                    // Global fallback undo on CVAT & UI
                     if (typeof this.callbacks.onUndo === 'function') {
                         e.preventDefault();
                         this.callbacks.onUndo();
@@ -4300,7 +4453,13 @@ class MacOSDock {
                     ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && e.shiftKey) ||
                     (e.code === 'KeyY' || e.key === 'y' || e.key === 'Y')
                 ) {
-                    // Redo directly on CVAT & UI
+                    // Local Frame Redo has top priority when hovering or focused on a card
+                    if (targetCard && targetCard.redo()) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                    }
+                    // Global fallback redo on CVAT & UI
                     if (typeof this.callbacks.onRedo === 'function') {
                         e.preventDefault();
                         this.callbacks.onRedo();

@@ -452,8 +452,17 @@ export class MacOSDock {
 
             // Undo / Redo shortcuts (Ctrl+Z, Cmd+Z, Ctrl+Shift+Z, Cmd+Shift+Z, Ctrl+Y)
             if (isCtrlOrCmd && !e.altKey) {
+                const targetFrame = this.hoveredFrame !== null ? this.hoveredFrame : this.state.currentFrame;
+                const targetCard = this.cards.get(targetFrame);
+
                 if ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && !e.shiftKey) {
-                    // Undo directly on CVAT & UI
+                    // Local Frame Undo has top priority when hovering or focused on a card
+                    if (targetCard && targetCard.undo()) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                    }
+                    // Global fallback undo on CVAT & UI
                     if (typeof this.callbacks.onUndo === 'function') {
                         e.preventDefault();
                         this.callbacks.onUndo();
@@ -462,7 +471,13 @@ export class MacOSDock {
                     ((e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z') && e.shiftKey) ||
                     (e.code === 'KeyY' || e.key === 'y' || e.key === 'Y')
                 ) {
-                    // Redo directly on CVAT & UI
+                    // Local Frame Redo has top priority when hovering or focused on a card
+                    if (targetCard && targetCard.redo()) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        return;
+                    }
+                    // Global fallback redo on CVAT & UI
                     if (typeof this.callbacks.onRedo === 'function') {
                         e.preventDefault();
                         this.callbacks.onRedo();

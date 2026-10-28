@@ -660,4 +660,105 @@ console.assert(Math.abs(resizeBoxPx.top - simulatedDragPos.y) < 1e-9, 'Dragged c
 
 console.log('✓ Screen-space 4-corner resizing with fixed opposite anchor & zero edge resize passed');
 
+// Test 22: Localized FrameCard Undo / Redo history stack
+class MockFrameCard {
+    constructor(frame, data) {
+        this.frame = frame;
+        this.data = JSON.parse(JSON.stringify(data));
+        this.undoStack = [];
+        this.redoStack = [];
+        this.maxHistory = 30;
+    }
+    takeSnapshot() {
+        return {
+            box: { ...(this.data.box || {}) },
+            points: Array.isArray(this.data.points) ? [...this.data.points] : [],
+            outside: !!this.data.outside,
+            keyframe: !!this.data.keyframe
+        };
+    }
+    pushUndoSnapshot(snap) {
+        if (!snap) return;
+        this.undoStack.push(snap);
+        if (this.undoStack.length > this.maxHistory) this.undoStack.shift();
+        this.redoStack = [];
+    }
+    undo() {
+        if (this.undoStack.length === 0) return false;
+        const currentSnap = this.takeSnapshot();
+        const prevSnap = this.undoStack.pop();
+        this.redoStack.push(currentSnap);
+        if (this.redoStack.length > this.maxHistory) this.redoStack.shift();
+        this.restoreSnapshot(prevSnap);
+        return true;
+    }
+    redo() {
+        if (this.redoStack.length === 0) return false;
+        const currentSnap = this.takeSnapshot();
+        const nextSnap = this.redoStack.pop();
+        this.undoStack.push(currentSnap);
+        if (this.undoStack.length > this.maxHistory) this.undoStack.shift();
+        this.restoreSnapshot(nextSnap);
+        return true;
+    }
+    restoreSnapshot(snap) {
+        if (!snap) return;
+        this.data.box = { ...(snap.box || {}) };
+        this.data.points = Array.isArray(snap.points) ? [...snap.points] : [];
+        this.data.outside = !!snap.outside;
+        this.data.keyframe = !!snap.keyframe;
+    }
+}
+
+const card0 = new MockFrameCard(0, {
+    box: { x: 1, y: 2, z: 3, rx: 0, ry: 0, rz: 0.2, sx: 2.0, sy: 4.5, sz: 1.6 },
+    points: [1, 2, 3, 0, 0, 0.2, 2.0, 4.5, 1.6],
+    outside: false,
+    keyframe: true
+});
+
+// 1. Initial state
+console.assert(card0.undo() === false, 'Undo on empty stack should return false');
+console.assert(card0.redo() === false, 'Redo on empty stack should return false');
+
+// 2. Perform edit 1: change dimensions & outside
+card0.pushUndoSnapshot(card0.takeSnapshot());
+card0.data.box.sx = 2.5;
+card0.data.outside = true;
+console.assert(card0.undoStack.length === 1, 'Undo stack has 1 snapshot');
+
+// 3. Perform edit 2: rotate
+card0.pushUndoSnapshot(card0.takeSnapshot());
+card0.data.box.rz = 0.8;
+console.assert(card0.undoStack.length === 2, 'Undo stack has 2 snapshots');
+
+// 4. Undo edit 2
+const didUndo1 = card0.undo();
+console.assert(didUndo1 === true, 'Undo should succeed');
+console.assert(Math.abs(card0.data.box.rz - 0.2) < 1e-5, 'rz restored to 0.2');
+console.assert(Math.abs(card0.data.box.sx - 2.5) < 1e-5, 'sx is still 2.5');
+console.assert(card0.data.outside === true, 'outside is still true');
+console.assert(card0.redoStack.length === 1, 'Redo stack has 1 snapshot');
+
+// 5. Undo edit 1
+const didUndo2 = card0.undo();
+console.assert(didUndo2 === true, 'Undo should succeed');
+console.assert(Math.abs(card0.data.box.sx - 2.0) < 1e-5, 'sx restored to initial 2.0');
+console.assert(card0.data.outside === false, 'outside restored to initial false');
+console.assert(card0.redoStack.length === 2, 'Redo stack has 2 snapshots');
+
+// 6. Redo edit 1
+const didRedo1 = card0.redo();
+console.assert(didRedo1 === true, 'Redo should succeed');
+console.assert(Math.abs(card0.data.box.sx - 2.5) < 1e-5, 'sx redone to 2.5');
+console.assert(card0.data.outside === true, 'outside redone to true');
+console.assert(card0.redoStack.length === 1, 'Redo stack has 1 snapshot remaining');
+
+// 7. Branching edit clears redo stack
+card0.pushUndoSnapshot(card0.takeSnapshot());
+card0.data.box.sy = 5.0;
+console.assert(card0.redoStack.length === 0, 'New mutation should clear redo stack');
+
+console.log('✓ Localized FrameCard Undo / Redo history stack passed');
+
 console.log('All Unit Tests Passed Successfully!');
