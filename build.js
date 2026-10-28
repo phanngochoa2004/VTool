@@ -30,7 +30,7 @@ let bundleCode = `/**
     if (window.__CVAT_QAQC_INSPECTOR_LOADED__) return;
     window.__CVAT_QAQC_INSPECTOR_LOADED__ = true;
 
-    console.log('[CVAT-QAQC] Initializing 3D Multi-Frame QA/QC Inspector (Main World Bundle)...');
+    console.log('[CVAT-QAQC] Initializing 3D Multi-Frame QA/QC Inspector v1.2.0 (4-Corner Only Resizing, Fast INP)...');
 `;
 
 for (const f of files) {

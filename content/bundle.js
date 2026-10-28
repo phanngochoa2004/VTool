@@ -11,7 +11,7 @@
     if (window.__CVAT_QAQC_INSPECTOR_LOADED__) return;
     window.__CVAT_QAQC_INSPECTOR_LOADED__ = true;
 
-    console.log('[CVAT-QAQC] Initializing 3D Multi-Frame QA/QC Inspector (Main World Bundle)...');
+    console.log('[CVAT-QAQC] Initializing 3D Multi-Frame QA/QC Inspector v1.2.0 (4-Corner Only Resizing, Fast INP)...');
 
     // ------------------------------------------
     // File: src\config\allowed_sites.js
@@ -3961,8 +3961,16 @@ class MacOSDock {
 
         const titleSpan = document.createElement('span');
         titleSpan.textContent = '3D QA/QC';
+
+        const versionBadge = document.createElement('span');
+        versionBadge.className = 'cvat-qaqc-version-pill';
+        versionBadge.textContent = 'v1.2.0';
+        versionBadge.title = 'v1.2.0: 4-Corner Resizing Only (Edge resizing disabled)';
+        versionBadge.style.cssText = 'font-size: 9.5px; background: rgba(10, 132, 255, 0.2); color: #0A84FF; padding: 1px 5px; border-radius: 4px; margin-left: 5px; font-weight: 600; border: 1px solid rgba(10, 132, 255, 0.4); letter-spacing: 0.3px;';
+
         title.appendChild(iconSvg);
         title.appendChild(titleSpan);
+        title.appendChild(versionBadge);
 
         const trackBadge = document.createElement('span');
         trackBadge.className = 'cvat-qaqc-track-badge';

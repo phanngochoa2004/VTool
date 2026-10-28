@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CVAT 3D Multi-Frame QA/QC Inspector",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "macOS HIG multi-frame 3D orthogonal (Top, Front, Side) QA/QC inspection tool for CVAT point clouds without server requests.",
   "permissions": [
     "activeTab"
