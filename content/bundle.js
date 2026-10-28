@@ -578,7 +578,7 @@ class OrthoCanvasRenderer {
         if (!ctx) return;
 
         const metrics = this.getMetrics(canvas, box, viewType, options);
-        const {
+        let {
             dpr, width, height, sx, sy, sz,
             dimH, dimV, scale, centerX, centerY,
             boxPxW, boxPxH, boxLeft, boxTop, boxRight, boxBottom,
@@ -603,6 +603,25 @@ class OrthoCanvasRenderer {
         const isActivelyTranslating = isInteractingThisView && interaction.activeAction === 'translate';
         const activeResizeAction = isInteractingThisView && interaction.activeAction?.startsWith('resize')
             ? interaction.activeAction : null;
+
+        // If this view is actively undergoing 4-corner resize, lock visual box directly to the mouse-driven bounds
+        if (isInteractingThisView && interaction.activeAction === 'resize-corner' && interaction.resizeBoxPx) {
+            const rbp = interaction.resizeBoxPx;
+            boxLeft = rbp.left;
+            boxTop = rbp.top;
+            boxRight = rbp.right;
+            boxBottom = rbp.bottom;
+            boxPxW = rbp.width;
+            boxPxH = rbp.height;
+            corners = {
+                tl: { x: boxLeft, y: boxTop },
+                tr: { x: boxRight, y: boxTop },
+                bl: { x: boxLeft, y: boxBottom },
+                br: { x: boxRight, y: boxBottom }
+            };
+            rotDotX = boxLeft + boxPxW / 2;
+            rotDotY = boxTop - 20;
+        }
 
         // 1. Background
         ctx.fillStyle = '#141416';
@@ -3371,7 +3390,7 @@ class FrameCard {
             // 1. Heading rotation helper (Top view only - green circle dot on forward stem)
             if (viewType === 'top') {
                 const distToDot = Math.hypot(pos.x - metrics.rotDotX, pos.y - metrics.rotDotY);
-                if (distToDot <= 12) {
+                if (distToDot <= 14) {
                     return { action: 'rotate', target: 'rotate' };
                 }
             }
@@ -3380,7 +3399,7 @@ class FrameCard {
             if (metrics.corners) {
                 for (const [key, pt] of Object.entries(metrics.corners)) {
                     const dist = Math.hypot(pos.x - pt.x, pos.y - pt.y);
-                    if (dist <= 12) {
+                    if (dist <= 14) {
                         return { action: 'resize-corner', cornerKey: key, target: `corner-${key}` };
                     }
                 }
@@ -3486,25 +3505,56 @@ class FrameCard {
             } else if (action === 'resize-corner') {
                 // Authentic CVAT 4-corner resizing with fixed opposite corner anchor
                 const {
-                    signU, signV, oppLocalU, oppLocalV,
+                    signU, signV, oppPxX, oppPxY,
                     initialBox, initialMetrics
                 } = this.dragState;
 
-                const u_cur = (pos.x - initialMetrics.centerX) / initialMetrics.scale;
-                const v_cur = (initialMetrics.centerY - pos.y) / initialMetrics.scale;
-                const minDim = 0.15;
+                const scale = initialMetrics.scale;
+                const minDimPx = 0.15 * scale; // Minimum 0.15m in pixels
 
-                const rawDimH = (u_cur - oppLocalU) * signU;
-                const newDimH = Math.max(minDim, rawDimH);
-                const u_clamped = oppLocalU + signU * newDimH;
+                // In canvas pixel coordinates: clamp dragged corner so box never collapses
+                let dragPxX = pos.x;
+                let dragPxY = pos.y;
 
-                const rawDimV = (v_cur - oppLocalV) * signV;
-                const newDimV = Math.max(minDim, rawDimV);
-                const v_clamped = oppLocalV + signV * newDimV;
+                if (signU > 0) {
+                    dragPxX = Math.max(oppPxX + minDimPx, dragPxX);
+                } else {
+                    dragPxX = Math.min(oppPxX - minDimPx, dragPxX);
+                }
 
-                // Midpoint between fixed opposite corner and clamped dragged corner
-                const u_mid = (oppLocalU + u_clamped) / 2;
-                const v_mid = (oppLocalV + v_clamped) / 2;
+                if (signV > 0) {
+                    dragPxY = Math.min(oppPxY - minDimPx, dragPxY);
+                } else {
+                    dragPxY = Math.max(oppPxY + minDimPx, dragPxY);
+                }
+
+                const boxPxLeft = Math.min(oppPxX, dragPxX);
+                const boxPxRight = Math.max(oppPxX, dragPxX);
+                const boxPxTop = Math.min(oppPxY, dragPxY);
+                const boxPxBottom = Math.max(oppPxY, dragPxY);
+                const boxPxW = boxPxRight - boxPxLeft;
+                const boxPxH = boxPxBottom - boxPxTop;
+
+                // Pass screen pixel bounds to renderer so opposite anchor stays rock solid
+                this.dragState.resizeBoxPx = {
+                    left: boxPxLeft,
+                    right: boxPxRight,
+                    top: boxPxTop,
+                    bottom: boxPxBottom,
+                    width: boxPxW,
+                    height: boxPxH
+                };
+
+                const newDimH = boxPxW / scale;
+                const newDimV = boxPxH / scale;
+
+                // Center displacement in local view frame
+                const newPxCenterX = (boxPxLeft + boxPxRight) / 2;
+                const newPxCenterY = (boxPxTop + boxPxBottom) / 2;
+                const dxPx = newPxCenterX - initialMetrics.centerX;
+                const dyPx = newPxCenterY - initialMetrics.centerY;
+                const u_mid = dxPx / scale;
+                const v_mid = -dyPx / scale;
 
                 const rz0 = initialBox.rz || 0;
                 let d_lx = 0, d_ly = 0, d_lz = 0;
@@ -3577,14 +3627,18 @@ class FrameCard {
 
             let oppLocalU = 0;
             let oppLocalV = 0;
+            let oppPxX = 0;
+            let oppPxY = 0;
             let signU = 0;
             let signV = 0;
 
-            if (action === 'resize-corner' && cornerKey) {
+            if (action === 'resize-corner' && cornerKey && oppKey) {
                 signU = (cornerKey === 'tr' || cornerKey === 'br') ? 1 : -1;
                 signV = (cornerKey === 'tl' || cornerKey === 'tr') ? 1 : -1;
                 oppLocalU = -signU * (metrics.dimH / 2);
                 oppLocalV = -signV * (metrics.dimV / 2);
+                oppPxX = metrics.corners[oppKey].x;
+                oppPxY = metrics.corners[oppKey].y;
             }
 
             this.dragState = {
@@ -3597,14 +3651,18 @@ class FrameCard {
                 signV,
                 oppLocalU,
                 oppLocalV,
+                oppPxX,
+                oppPxY,
                 initialBox,
                 initialMetrics,
+                initialLocalPoints: this.lastRenderLocalPoints || null,
                 startX: pos.x,
                 startY: pos.y,
                 lastX: pos.x,
                 lastY: pos.y,
                 lastAngle: Math.atan2(metrics.centerY - pos.y, pos.x - metrics.centerX),
-                hasMoved: false
+                hasMoved: false,
+                resizeBoxPx: null
             };
 
             this.requestRender();
@@ -3647,7 +3705,8 @@ class FrameCard {
                     oppositeCornerKey: this.dragState?.oppositeCornerKey || null,
                     viewType: this.dragState?.viewType || null,
                     hoverViewType: this.hoverState?.viewType || null,
-                    hoverTarget: this.hoverState?.target || null
+                    hoverTarget: this.hoverState?.target || null,
+                    resizeBoxPx: this.dragState?.resizeBoxPx || null
                 }
             };
             this.renderViews(this.lastPointCloudData, this.isCurrent, opts);
@@ -3701,13 +3760,16 @@ class FrameCard {
 
         // Transform points to local box coordinate frame
         let localPoints = null;
-        if (pointCloudData && pointCloudData.positions) {
+        if (options.interaction?.activeAction === 'resize-corner' && this.dragState?.initialLocalPoints) {
+            localPoints = this.dragState.initialLocalPoints;
+        } else if (pointCloudData && pointCloudData.positions) {
             localPoints = Math3D.transformAndCropPoints(
                 pointCloudData.positions,
                 pointCloudData.stride || 3,
                 box,
                 1.35
             );
+            this.lastRenderLocalPoints = localPoints;
         }
 
         const renderOptions = {

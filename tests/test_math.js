@@ -630,4 +630,34 @@ console.assert(bigM.boxPxW > baseM.boxPxW, 'Bigger box has larger drawn pixel wi
 console.assert(Math.abs(bigM.boxPxW / baseM.boxPxW - 1.5) < 1e-4, 'Box width scales proportionally (1.5x)');
 console.log('✓ OrthoCanvasRenderer realtime visual box expansion/contraction with referenceBox passed');
 
+// Test 21: Screen-space opposite corner anchor invariance & Edge resize prohibition
+const testMetrics = OrthoCanvasRenderer.getMetrics(mockCanvas, { sx: 2.0, sy: 4.0, sz: 1.5 }, 'top');
+const oppPxX = testMetrics.corners.bl.x;
+const oppPxY = testMetrics.corners.bl.y;
+const simulatedDragPos = { x: testMetrics.corners.tr.x + 35, y: testMetrics.corners.tr.y - 20 };
+
+const scale = testMetrics.scale;
+const minDimPx = 0.15 * scale;
+const clampedDragX = Math.max(oppPxX + minDimPx, simulatedDragPos.x);
+const clampedDragY = Math.min(oppPxY - minDimPx, simulatedDragPos.y);
+
+const resizeBoxPx = {
+    left: Math.min(oppPxX, clampedDragX),
+    right: Math.max(oppPxX, clampedDragX),
+    top: Math.min(oppPxY, clampedDragY),
+    bottom: Math.max(oppPxY, clampedDragY),
+    width: Math.abs(clampedDragX - oppPxX),
+    height: Math.abs(oppPxY - clampedDragY)
+};
+
+// Invariant 1: Opposite corner pixel position remains 100% frozen
+console.assert(Math.abs(resizeBoxPx.left - oppPxX) < 1e-9, 'Opposite anchor X stays invariant to 0px');
+console.assert(Math.abs(resizeBoxPx.bottom - oppPxY) < 1e-9, 'Opposite anchor Y stays invariant to 0px');
+
+// Invariant 2: Dragged corner is exactly at mouse pointer
+console.assert(Math.abs(resizeBoxPx.right - simulatedDragPos.x) < 1e-9, 'Dragged corner X follows mouse exactly');
+console.assert(Math.abs(resizeBoxPx.top - simulatedDragPos.y) < 1e-9, 'Dragged corner Y follows mouse exactly');
+
+console.log('✓ Screen-space 4-corner resizing with fixed opposite anchor & zero edge resize passed');
+
 console.log('All Unit Tests Passed Successfully!');

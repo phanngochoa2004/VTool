@@ -134,7 +134,7 @@ export class OrthoCanvasRenderer {
         if (!ctx) return;
 
         const metrics = this.getMetrics(canvas, box, viewType, options);
-        const {
+        let {
             dpr, width, height, sx, sy, sz,
             dimH, dimV, scale, centerX, centerY,
             boxPxW, boxPxH, boxLeft, boxTop, boxRight, boxBottom,
@@ -159,6 +159,25 @@ export class OrthoCanvasRenderer {
         const isActivelyTranslating = isInteractingThisView && interaction.activeAction === 'translate';
         const activeResizeAction = isInteractingThisView && interaction.activeAction?.startsWith('resize')
             ? interaction.activeAction : null;
+
+        // If this view is actively undergoing 4-corner resize, lock visual box directly to the mouse-driven bounds
+        if (isInteractingThisView && interaction.activeAction === 'resize-corner' && interaction.resizeBoxPx) {
+            const rbp = interaction.resizeBoxPx;
+            boxLeft = rbp.left;
+            boxTop = rbp.top;
+            boxRight = rbp.right;
+            boxBottom = rbp.bottom;
+            boxPxW = rbp.width;
+            boxPxH = rbp.height;
+            corners = {
+                tl: { x: boxLeft, y: boxTop },
+                tr: { x: boxRight, y: boxTop },
+                bl: { x: boxLeft, y: boxBottom },
+                br: { x: boxRight, y: boxBottom }
+            };
+            rotDotX = boxLeft + boxPxW / 2;
+            rotDotY = boxTop - 20;
+        }
 
         // 1. Background
         ctx.fillStyle = '#141416';
