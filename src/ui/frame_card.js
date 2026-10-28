@@ -828,15 +828,17 @@ export class FrameCard {
                 while (nextRz < -Math.PI) nextRz += Math.PI * 2;
                 this.data.box.rz = parseFloat(nextRz.toFixed(4));
             } else if (action === 'translate') {
-                const dxPx = pos.x - this.dragState.lastX;
-                const dyPx = pos.y - this.dragState.lastY;
+                const totalDxPx = pos.x - this.dragState.startX;
+                const totalDyPx = pos.y - this.dragState.startY;
+                this.dragState.translateOffsetPx = { dx: totalDxPx, dy: totalDyPx };
                 this.dragState.lastX = pos.x;
                 this.dragState.lastY = pos.y;
 
-                const scale = metrics.scale;
-                const d_h = dxPx / scale;
-                const d_v = -dyPx / scale;
-                const rz = this.data.box.rz || 0;
+                const { initialBox, initialMetrics } = this.dragState;
+                const scale = initialMetrics.scale;
+                const d_h = totalDxPx / scale;
+                const d_v = -totalDyPx / scale;
+                const rz = initialBox.rz || 0;
 
                 let d_lx = 0, d_ly = 0, d_lz = 0;
                 if (viewType === 'top') {
@@ -854,9 +856,9 @@ export class FrameCard {
                 const d_wy = d_lx * Math.sin(rz) + d_ly * Math.cos(rz);
                 const d_wz = d_lz;
 
-                this.data.box.x = parseFloat(((this.data.box.x || 0) + d_wx).toFixed(3));
-                this.data.box.y = parseFloat(((this.data.box.y || 0) + d_wy).toFixed(3));
-                this.data.box.z = parseFloat(((this.data.box.z || 0) + d_wz).toFixed(3));
+                this.data.box.x = parseFloat(((initialBox.x || 0) + d_wx).toFixed(3));
+                this.data.box.y = parseFloat(((initialBox.y || 0) + d_wy).toFixed(3));
+                this.data.box.z = parseFloat(((initialBox.z || 0) + d_wz).toFixed(3));
             } else if (action === 'resize-corner') {
                 // Authentic CVAT 4-corner resizing with fixed opposite corner anchor
                 const {
@@ -1019,7 +1021,8 @@ export class FrameCard {
                 lastY: pos.y,
                 lastAngle: Math.atan2(metrics.centerY - pos.y, pos.x - metrics.centerX),
                 hasMoved: false,
-                resizeBoxPx: null
+                resizeBoxPx: null,
+                translateOffsetPx: { dx: 0, dy: 0 }
             };
 
             this.requestRender();
@@ -1065,7 +1068,8 @@ export class FrameCard {
                     viewType: this.dragState?.viewType || null,
                     hoverViewType: this.hoverState?.viewType || null,
                     hoverTarget: this.hoverState?.target || null,
-                    resizeBoxPx: this.dragState?.resizeBoxPx || null
+                    resizeBoxPx: this.dragState?.resizeBoxPx || null,
+                    translateOffsetPx: this.dragState?.translateOffsetPx || null
                 }
             };
             this.renderViews(this.lastPointCloudData, this.isCurrent, opts);
@@ -1117,9 +1121,9 @@ export class FrameCard {
         // View Mode Class
         this.grid.className = `cvat-qaqc-views-grid mode-${viewMode}`;
 
-        // Transform points to local box coordinate frame
+        // Transform points to local box coordinate frame (cached during any active drag to eliminate GC stutter)
         let localPoints = null;
-        if (options.interaction?.activeAction === 'resize-corner' && this.dragState?.initialLocalPoints) {
+        if (options.interaction?.activeAction && this.dragState?.initialLocalPoints) {
             localPoints = this.dragState.initialLocalPoints;
         } else if (pointCloudData && pointCloudData.positions) {
             localPoints = Math3D.transformAndCropPoints(
