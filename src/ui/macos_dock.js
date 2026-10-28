@@ -6,6 +6,7 @@
 
 import { FrameCard } from './frame_card.js';
 import { SizeClipboard } from '../core/size_clipboard.js';
+import { TrackReader } from '../core/track_reader.js';
 
 export class MacOSDock {
     /**
@@ -28,6 +29,7 @@ export class MacOSDock {
         };
         this.cards = new Map(); // frame -> FrameCard
         this.hoveredFrame = null; // Track frame currently hovered by user mouse
+        this.hotkeyFrame = null;
         this.dom = null;
         this.triggerEl = null;
         this.triggerDot = null;
@@ -412,6 +414,45 @@ export class MacOSDock {
         // Toolbar rotate buttons removed per user preference; each card retains its own rotation controls
     }
 
+    /** Resolve a hovered or keyboard-focused inspector card independently of CVAT's main canvas. */
+    getHotkeyTarget(event) {
+        if (!this.isOpen) return null;
+        const target = event?.composedPath?.()[0] || event?.target;
+        const eventCard = target?.closest?.('.cvat-qaqc-card');
+        const focused = document.activeElement?.closest?.('.cvat-qaqc-card');
+        const hovered = this.dom?.querySelector?.('.cvat-qaqc-card:hover');
+        const inPanel = target?.closest?.('.cvat-qaqc-dock') ||
+            document.activeElement?.closest?.('.cvat-qaqc-dock') || this.dom?.matches?.(':hover');
+        const frame = eventCard ? Number(eventCard.dataset.frame) :
+            hovered ? Number(hovered.dataset.frame) :
+            focused ? Number(focused.dataset.frame) :
+            this.hoveredFrame ?? (inPanel ? this.hotkeyFrame ?? this.state.currentFrame : null);
+        if (frame === null) return null;
+        const card = this.cards.get(frame);
+        const clientID = this.state.activeClientID;
+        if (!card?.dom?.isConnected || clientID === null || clientID === undefined) return null;
+        const job = this.callbacks.getJob?.();
+        return {
+            card, job, clientID, frame,
+            store: this.callbacks.getStore?.(),
+            isCurrent: () => this.isOpen && card.dom.isConnected && this.cards.get(frame) === card &&
+                this.state.activeClientID === clientID && this.callbacks.getJob?.() === job,
+            refresh: () => this.callbacks.onRefreshTrack?.(clientID),
+            read: () => this.callbacks.onReadCuboid(frame, clientID),
+            update: async (points) => {
+                if (this.state.activeClientID !== clientID || this.callbacks.getJob?.() !== job) {
+                    throw new Error('Đã đổi track/job; bỏ phím đang chờ.');
+                }
+                const box = TrackReader.parsePointsToBox(points);
+                const saved = await this.callbacks.onUpdateCuboid(frame, clientID, points, box);
+                if (saved === false) throw new Error('CVAT chưa lưu được thay đổi của frame này.');
+                if (this.cards.get(frame) === card) {
+                    card.updateData({ ...card.data, points: [...points], box, keyframe: true });
+                }
+            },
+        };
+    }
+
     setupKeyboardShortcuts() {
         window.addEventListener('keydown', (e) => {
             const tag = (e.target && e.target.tagName) || '';
@@ -671,6 +712,9 @@ export class MacOSDock {
      */
     updateTrack(clientID, framesData, currentFrame, pcdCache) {
         this.state.activeClientID = clientID;
+        if (this.hotkeyFrame !== null && (this.hotkeyFrame < 0 || !framesData.some((data) => data.frame === this.hotkeyFrame))) {
+            this.hotkeyFrame = null;
+        }
         this.state.framesData = framesData || [];
         this.state.currentFrame = currentFrame;
         this.pcdCache = pcdCache;
@@ -723,7 +767,7 @@ export class MacOSDock {
                 (frame, isHovered) => {
                     this.hoveredFrame = isHovered ? frame : (this.hoveredFrame === frame ? null : this.hoveredFrame);
                 },
-                { viewOrder: this.state.viewOrder }
+                { viewOrder: this.state.viewOrder, onActivate: (frame) => { this.hotkeyFrame = frame; } }
             );
 
             this.cards.set(fData.frame, card);

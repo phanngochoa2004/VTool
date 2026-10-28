@@ -8,6 +8,7 @@ import { PCDCache } from '../src/core/pcd_cache.js';
 import { TrackReader } from '../src/core/track_reader.js';
 import { MacOSDock } from '../src/ui/macos_dock.js';
 import { isAllowedSite } from '../src/config/allowed_sites.js';
+import { start3DHotkeysAutostart } from '../src/core/hotkeys_autostart.js';
 
 (async function initQAQCInspector() {
     // Chỉ kích hoạt extension trên các trang web thuộc danh sách cho phép (ALLOWED_SITES)
@@ -116,7 +117,27 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
         onJumpToFrame: (f) => hook.jumpToFrame(f),
         onUndo: () => hook.undo(),
         onRedo: () => hook.redo(),
+        getJob: () => hook.jobInstance,
+        getStore: () => hook.store,
+        onRefreshTrack: async (clientID) => {
+            if (!hook.jobInstance || dock.state.activeClientID !== clientID) return;
+            currentTrackFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
+            dock.refreshTrackData(currentTrackFrames);
+        },
+        onReadCuboid: async (frame, clientID) => {
+            const job = hook.jobInstance;
+            if (!job || hook.store?.getState()?.annotation?.workspace === 'review') {
+                throw new Error('Chưa kết nối được job CVAT có quyền chỉnh sửa.');
+            }
+            const states = await job.annotations.get(frame, true, []);
+            if (hook.jobInstance !== job) throw new Error('Đã đổi job; bỏ phím đang chờ.');
+            return states.find((state) => state.clientID === clientID);
+        },
         onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
+            // Persist first so a failed edit never enters the inspector's interpolation cache.
+            const saved = await hook.updateObjectCuboid(frame, clientID, newPoints);
+            if (!saved) return false;
+
             // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
             const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints, null);
             if (updatedFrames && updatedFrames.length > 0) {
@@ -128,8 +149,7 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
                 }
             }
 
-            // Persist to CVAT in-memory AnnotationsCollection and sync Redux
-            await hook.updateObjectCuboid(frame, clientID, newPoints);
+            return true;
         },
         onUpdateOutside: async (frame, clientID, outside) => {
             // Realtime instant re-interpolation for all cards across the dock filmstrip (< 0.1ms)
@@ -163,6 +183,8 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
             await hook.applySizeToTrack(clientID, sizeObj, kfNumbers);
         }
     });
+
+    start3DHotkeysAutostart({ getInspectorTarget: (event) => dock.getHotkeyTarget(event) });
 
     // Listen for object selection change (track or shape)
     hook.on('objectChange', async ({ clientID, job, canvas, frame }) => {

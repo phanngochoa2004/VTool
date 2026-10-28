@@ -5,6 +5,30 @@
  */
 
 export class Math3D {
+    /** Apply a local or world axis turn without depending on a CVAT Three.js mesh. */
+    static rotateEulerXYZ(angles, axis, angle, local = true) {
+        const [rx, ry, rz] = angles;
+        const [cx, cy, cz] = angles.map((value) => Math.cos(value / 2));
+        const [sx, sy, sz] = [rx, ry, rz].map((value) => Math.sin(value / 2));
+        const original = [sx * cy * cz + cx * sy * sz, cx * sy * cz - sx * cy * sz,
+            cx * cy * sz + sx * sy * cz, cx * cy * cz - sx * sy * sz];
+        const turn = [0, 0, 0, Math.cos(angle / 2)];
+        turn[axis] = Math.sin(angle / 2);
+        const [ax, ay, az, aw] = local ? original : turn;
+        const [bx, by, bz, bw] = local ? turn : original;
+        const x = aw * bx + ax * bw + ay * bz - az * by;
+        const y = aw * by - ax * bz + ay * bw + az * bx;
+        const z = aw * bz + ax * by - ay * bx + az * bw;
+        const w = aw * bw - ax * bx - ay * by - az * bz;
+        const m13 = 2 * (x * z + y * w);
+        const pitch = Math.asin(Math.max(-1, Math.min(1, m13)));
+        if (Math.abs(m13) >= 0.9999999) {
+            return [Math.atan2(2 * (y * z + x * w), 1 - 2 * (x * x + z * z)), pitch, 0];
+        }
+        return [Math.atan2(2 * (x * w - y * z), 1 - 2 * (x * x + y * y)), pitch,
+            Math.atan2(2 * (z * w - x * y), 1 - 2 * (y * y + z * z))];
+    }
+
     /**
      * Compute 3x3 rotation matrix from Euler angles (XYZ order - standard Three.js convention)
      * @param {number} rx - rotation around X in radians

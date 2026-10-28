@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<title>Inspector hotkeys — kiểm thử không chọn box CVAT</title>
+<link rel="stylesheet" href="../../src/ui/macos_theme.css">
+<style>
+body { background: #edf0f4; color: #172133; font: 15px system-ui; margin: 24px; }
+h1 { font-size: 22px; } table { border-collapse: collapse; width: 720px; }
+th, td { border: 1px solid #adb9ca; padding: 7px 12px; text-align: left; }
+#results { white-space: pre-wrap; } #native-empty { width: 1px; height: 1px; }
+</style>
+<h1>Inspector: chỉnh trực tiếp trên panel</h1>
+<p>CVAT chính: <strong>không chọn box</strong>. Bấm thẻ Frame 1 rồi thử Shift+←, W/E, G/Shift+G và P/Shift+P.</p>
+<p id="controller">Đang khởi động…</p>
+<table><thead><tr><th>Frame</th><th>Dài X</th><th>Rộng Y</th><th>Cao Z</th><th>Outside</th></tr></thead><tbody id="metrics"></tbody></table>
+<p id="results" role="status"></p>
+<canvas id="native-empty" aria-label="CVAT chính không chọn box"></canvas>
+<script type="module">
+import { CVATHook } from '../../src/core/cvat_hook.js';
+import { TrackReader } from '../../src/core/track_reader.js';
+import { MacOSDock } from '../../src/ui/macos_dock.js';
+import { start3DHotkeysAutostart } from '../../src/core/hotkeys_autostart.js';
+
+const label = { id: 1, name: 'Test vehicle', color: '#30d158' };
+const states = [0, 1, 2].map((frame) => ({ frame, clientID: 7, objectType: 'track', shapeType: 'cuboid',
+    keyframe: true, outside: false, label, points: [10, 20, 3, 0, 0, 0, frame === 2 ? 5.5 : 4.5, 1.85, 1.5] }));
+const history = [];
+let legacyCalls = 0;
+let legacyDisposed = false;
+const native = document.querySelector('#native-empty');
+native.getDrawnObjects = () => [];
+native.updatePosition = () => { throw new Error('Không được chỉnh qua canvas CVAT chính trong fixture này.'); };
+
+// Reproduce an older extension installing its capture handler before VTool.
+const legacyAbort = new AbortController();
+window.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'KeyW', 'KeyG'].includes(event.code)) return;
+    legacyCalls++;
+    event.preventDefault(); event.stopImmediatePropagation();
+    document.querySelector('#results').textContent = 'LỖI: Hãy chọn đúng một box 3D trước.';
+}, { capture: true, signal: legacyAbort.signal });
+window.CVAT3DHotkeys = { active: true, dispose() { legacyAbort.abort(); legacyDisposed = true; this.active = false; } };
+
+function show() {
+    const body = document.querySelector('#metrics');
+    body.replaceChildren(...states.map((state) => {
+        const row = document.createElement('tr');
+        row.dataset.frame = String(state.frame);
+        for (const value of [state.frame, ...state.points.slice(6, 9).map((n) => n.toFixed(3)), state.outside]) {
+            const cell = document.createElement('td'); cell.textContent = String(value); row.appendChild(cell);
+        }
+        return row;
+    }));
+    document.querySelector('#controller').textContent = `Bộ phím cũ đã dừng: ${legacyDisposed}; số phím lọt vào bộ cũ: ${legacyCalls}`;
+    document.querySelector('#results').textContent = `Đã lưu ${history.length} thay đổi vào bộ nhớ thử nghiệm. CVAT vẫn không chọn box.`;
+}
+for (const state of states) {
+    state.save = async () => { history.push({ frame: state.frame, points: [...state.points], outside: state.outside }); show(); };
+    state.export = async () => ({ shapes: states.map((s) => ({ frame: s.frame })) });
+}
+const job = { startFrame: 0, stopFrame: 2, labels: [label],
+    annotations: {
+        get: async (frame) => states.filter((state) => state.frame === frame),
+        export: async () => ({ tracks: [{ clientID: 7, label, shapes: states.map((s) => ({
+            frame: s.frame, points: [...s.points], outside: s.outside })) }] }),
+    }, actions: { get: async () => ({ undo: history, redo: [] }) },
+};
+const store = { getState: () => ({ annotation: { job: { instance: job, frameNumbers: [0, 1, 2] },
+    player: { frame: { number: 0 } }, annotations: { states: [], selectedStatesID: [], activatedStateID: null },
+    workspace: 'standard3d' } }), dispatch() {} };
+const hook = new CVATHook();
+Object.assign(hook, { jobInstance: job, store, currentFrame: 0, activeClientID: 7 });
+let dock;
+const refresh = async () => { dock.refreshTrackData(await TrackReader.getTrackFrames(7, job)); show(); };
+dock = new MacOSDock({ getJob: () => job, getStore: () => store,
+    onReadCuboid: async (frame, id) => (await job.annotations.get(frame)).find((s) => s.clientID === id),
+    onUpdateCuboid: async (frame, id, points) => {
+        const saved = await hook.updateObjectCuboid(frame, id, points);
+        if (saved) await refresh();
+        return saved;
+    }, onRefreshTrack: refresh,
+});
+dock.updateTrack(7, await TrackReader.getTrackFrames(7, job), 0, { get: () => null });
+await dock.open();
+start3DHotkeysAutostart({ getInspectorTarget: (event) => dock.getHotkeyTarget(event) });
+show();
+</script>
+</html>

@@ -53,11 +53,59 @@ Công cụ kiểm định chất lượng (QA/QC) gán nhãn 3D Point Cloud chuy
    ```
 2. Bật công tắc **Chế độ dành cho nhà phát triển (Developer mode)** ở góc trên bên phải.
 3. Bấm vào nút **Tải tiện ích đã giải nén (Load unpacked)** ở góc trên bên trái.
-4. Chọn thư mục dự án:
-   ```
-   D:\Work\CVAT-module\CVAT-QAQC
-   ```
+4. Chọn thư mục repo `VTool` (thư mục chứa `manifest.json`).
    *(Nếu đã nạp phiên bản trước đó, chỉ cần bấm nút biểu tượng mũi tên tròn 🔄 Reload trên thẻ tiện ích).*
+
+---
+
+## Phím tắt CVAT 3D tích hợp
+
+Bộ phím từ `CVAT-3D-Hotkeys-1.6.0` tự chạy cùng Inspector trên các địa chỉ trong `src/config/allowed_sites.js`, kể cả khi mở job 3D sau khi trang đã tải. Chọn đúng một cuboid trước khi chỉnh; phím không can thiệp khi nhập liệu hoặc mở hộp thoại. Dữ liệu point cloud được tính bằng mét.
+
+Trong panel Inspector: đặt con trỏ lên thẻ frame cần sửa ở các ô Top/Side/Front, hoặc bấm trực tiếp vào thẻ/canvas rồi nhấn phím. Phím chỉnh đúng frame của thẻ đó (kể cả frame khác khung CVAT chính), cập nhật cả ba góc nhìn và lưu qua cơ chế chỉnh sửa sẵn có của repo. **Không cần chọn lại box trên CVAT chính.** G/Shift+G đồng bộ/khôi phục kích thước theo box trên thẻ đang chọn; P/Shift+P thao tác Outside của track trong panel. Alt+T vẫn chỉnh bố cục CVAT chính. Bộ tự bật thay thế handler cũ nếu handler đó chưa kết nối với Inspector.
+
+W và E đã hoán đổi chức năng: **Q/W** xoay trái/phải 2° quanh trục Z của point cloud; **E/R** xoay trái/phải 2° trong mặt Side quanh trục Y cục bộ.
+
+| Phím | Chức năng |
+| --- | --- |
+| ← / → | Tiến / lùi 4 cm theo hướng box trên mặt ngang |
+| ↑ / ↓ | Nâng / hạ 4 cm |
+| Numpad 1 / 2 | Dịch phải / trái 4 cm theo hướng box |
+| Shift + ← | Nới mặt phía ← ra 6 cm, giữ nguyên mặt phía → |
+| Shift + → | Thu mặt phía → vào 6 cm, giữ nguyên mặt phía ← |
+| Shift + ↑ / ↓ | Nới mặt trên ra / thu mặt dưới vào 6 cm, giữ nguyên mặt đối diện |
+| Shift + Numpad 1 / 2 | Nới mặt phải ra / thu mặt trái vào 6 cm, giữ nguyên mặt đối diện |
+| Numpad 4 / 5 | Nghiêng ngang phải / trái 3° quanh trục X cục bộ |
+| Z | Xoay trái 90° quanh trục Z của point cloud |
+| X | Xoay 90° quanh Z cục bộ và đổi Dài/Rộng, giữ nguyên vùng box |
+| 1 / 2 / 3 / 4 (hàng trên) | Mẫu Sedan / SUV / xe máy / người đi bộ |
+| G / Shift + G | Đồng bộ kích thước các keyframe cùng track trong job / khôi phục lần đồng bộ gần nhất |
+| P / Shift + P | Bật/tắt Outside toàn track trong job / khôi phục lần Outside gần nhất |
+| Alt + T | Bố cục 3D bên trái, Top trên phải, Side/Front dưới phải; thu gọn bảng ID |
+
+Các tổ hợp Shift đổi kích thước bằng cách **chỉnh một mặt, giữ mặt đối diện đứng yên** và giữ nguyên góc xoay, kể cả khi box đã xoay/nghiêng. Không cho giảm kích thước xuống 0 hoặc âm. Mỗi lần nhấn thực hiện một bước; giữ phím không tự lặp. Numpad 1/2 được nhận theo vị trí kể cả khi Num Lock tắt; số hàng trên vẫn dùng mẫu kích thước.
+
+Ví dụ Shift+←: chỉ mặt phía trái nở ra 6 cm; mặt phía phải đứng yên. Box không tịnh tiến cả khối; tọa độ tâm tự đổi 3 cm vì kích thước thay đổi một phía. Chiều dài tăng tổng cộng 6 cm. Shift+→ chỉ thu mặt phía phải vào 6 cm, giữ mặt trái đứng yên. Các phía dùng cùng hướng cục bộ như bộ phím dịch box của tool gốc.
+
+Kích thước mẫu Dài × Rộng × Cao: Sedan `4.5 × 1.85 × 1.5`, SUV `4.7 × 1.95 × 1.65`, xe máy `1.85 × 0.8 × 1.5`, người đi bộ `0.6 × 0.6 × 1.7`.
+
+Thay đổi đi qua cơ chế chỉnh sửa và lịch sử của CVAT; dùng Undo của CVAT hoặc Ctrl+Z để hoàn tác. G/P chỉ áp dụng Track; bản khôi phục Shift+G/P chỉ tồn tại trong phiên trang. Bấm **Save** trong CVAT để lưu lên server.
+
+Sau khi cập nhật: Reload tiện ích trong `chrome://extensions`, rồi tải lại tab CVAT. Tắt tiện ích hotkey cũ nếu còn bật riêng để tránh hai bộ phím chạy cùng lúc.
+
+## Build và kiểm tra
+
+Yêu cầu Node.js. Sau khi sửa mã nguồn, chạy:
+
+```sh
+node build.js
+node --test tests/test_hotkeys.cjs
+node tests/test_math.js
+```
+
+`content/bundle.js` là file Chrome nạp trực tiếp, cần build lại khi thay đổi `src/` hoặc `content/injector.js`.
+
+Để kiểm tra bằng trình duyệt, chạy HTTP server local tại thư mục repo và mở `tests/fixtures/inspector_hotkeys.html`. Trang dùng các thành phần Inspector thật với dữ liệu thử nghiệm trong bộ nhớ, không có box nào được chọn trên canvas CVAT chính, và mô phỏng bộ phím cũ đã chạy trước.
 
 ---
 
