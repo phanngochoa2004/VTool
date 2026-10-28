@@ -16,7 +16,7 @@
 (function registerHotkeys(global) {
     'use strict';
 
-const { Math3D, HotkeyPreferences } = global.CVATQAQC;
+const { Math3D, HotkeyPreferences, WorkspaceLayout } = global.CVATQAQC;
 
 function install3DHotkeys({ getInspectorTarget } = {}) {
     const config = {
@@ -154,92 +154,10 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
         return { store, job, item };
     }
 
-    function gridLayout(root) {
-        const visited = new Set();
-        const pending = Object.getOwnPropertyNames(root)
-            .filter((key) => key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$'))
-            .map((key) => root[key]);
-        while (pending.length && visited.size < 4000) {
-            const fiber = pending.pop();
-            if (!fiber || visited.has(fiber)) continue;
-            visited.add(fiber);
-            // ReactGridLayout là class: stateNode.props là props hiện tại ngay cả khi DOM fiber cũ.
-            const props = fiber.stateNode?.props || fiber.memoizedProps;
-            if (typeof props?.onLayoutChange === 'function' && Array.isArray(props.layout) &&
-                String(props.className || '').split(/\s+/).includes('cvat-canvas-grid-root')) return props;
-            pending.push(fiber.alternate, fiber.return);
-        }
-        throw new Error('Không đọc được bộ bố cục CVAT; Alt+T chưa hỗ trợ phiên bản này.');
-    }
-
     async function arrangeLayout(item) {
-        const roots = [...document.querySelectorAll('.cvat-canvas-grid-root')];
-        if (roots.length !== 1 || !roots[0].isConnected) {
-            throw new Error('Hãy mở giao diện Standard 3D trước khi nhấn Alt+T.');
-        }
-        const root = roots[0];
-        const props = gridLayout(root);
-        const viewIDs = ['canvas3D', 'canvas3DTop', 'canvas3DSide', 'canvas3DFront'];
-        if (props.layout.length !== 4 || viewIDs.some((id) =>
-            props.layout.filter((entry) => entry.i === id).length !== 1)) {
-            throw new Error('Alt+T cần đủ 4 khung 3D, Top, Side, Front; hãy đóng ảnh context nếu đang mở.');
-        }
-        const { cols, maxRows: rows } = props;
-        if (!Number.isInteger(cols) || cols < 6 || !Number.isInteger(rows) || rows < 4) {
-            throw new Error('Kích thước lưới CVAT chưa hỗ trợ bố cục Alt+T.');
-        }
-        const store = findStore(item.canvas);
-        const job = store.getState().annotation.job.instance;
-        const frame = store.getState().annotation.player.frame.number;
-        if (typeof store.getState().annotation.sidebarCollapsed !== 'boolean') {
-            throw new Error('Không đọc được trạng thái bảng ID để chuyển bố cục Alt+T.');
-        }
-        const fullscreen = [...root.querySelectorAll(
-            '.cvat-canvas-grid-fullscreen-item .cvat-grid-item-fullscreen-handler',
-        )];
-        if (fullscreen.length > 1 || fullscreen.some((handler) => typeof handler.click !== 'function')) {
-            throw new Error('Không thoát được khung phóng to; hãy thu nhỏ khung trước khi nhấn Alt+T.');
-        }
-        const left = Math.round(cols * 5 / 12);
-        const right = cols - left;
-        const top = Math.round(rows * 5 / 12);
-        const side = Math.round(right * 4 / 7);
-        const positions = {
-            canvas3D: { x: 0, y: 0, w: left, h: rows },
-            canvas3DTop: { x: left, y: 0, w: right, h: top },
-            canvas3DSide: { x: left, y: top, w: side, h: rows - top },
-            canvas3DFront: { x: left + side, y: top, w: right - side, h: rows - top },
-        };
-        const layout = props.layout.map((entry) => ({ ...entry, ...positions[entry.i] }));
-        // Gọi đúng callback CVAT dùng khi kéo/resize khung, giữ thứ tự và metadata của từng view.
-        props.onLayoutChange(layout);
-        fullscreen[0]?.click();
-        const deadline = Date.now() + 2000;
-        while (!stopped) {
-            const annotation = store.getState()?.annotation;
-            if (!root.isConnected || !item.canvas.isConnected || location.href !== item.url ||
-                annotation?.job?.instance !== job || annotation.player?.frame?.number !== frame || pointers.size) {
-                throw new Error('Đã đổi job/frame hoặc đang kéo chuột; đã dừng chuyển bố cục.');
-            }
-            const current = gridLayout(root).layout;
-            if (current.length === layout.length && layout.every((expected) => {
-                const actual = current.find((entry) => entry.i === expected.i);
-                return actual && ['x', 'y', 'w', 'h'].every((key) => actual[key] === expected[key]);
-            }) && !root.querySelectorAll('.cvat-canvas-grid-fullscreen-item').length) {
-                // Chỉ thu gọn nếu đang mở; Alt+T lần nữa vẫn giữ đúng bố cục trong ảnh.
-                if (annotation.sidebarCollapsed === false) {
-                    store.dispatch({ type: 'COLLAPSE_SIDEBAR', payload: {} });
-                }
-                if (store.getState().annotation.sidebarCollapsed !== true) {
-                    throw new Error('Đã sắp xếp khung nhưng chưa thu gọn được bảng ID.');
-                }
-                window.dispatchEvent(new Event('resize'));
-                report('Alt+T: 3D bên trái; Top trên phải; Side/Front dưới phải; đã thu gọn bảng ID.');
-                return;
-            }
-            if (Date.now() > deadline) throw new Error('Chưa xác nhận được bố cục Alt+T; kiểm tra các khung CVAT.');
-            await new Promise((resolve) => setTimeout(resolve, 25));
-        }
+        if (!item.canvas?.isConnected) throw new Error('Hãy mở giao diện Standard 3D trước khi bật Split View.');
+        const enabled = WorkspaceLayout.toggle();
+        report(enabled ? 'Alt+T: đã bật Split View 3D.' : 'Alt+T: đã khôi phục bố cục CVAT.');
     }
 
     function assertSyncContext(context) {

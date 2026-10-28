@@ -9,7 +9,7 @@
         ['toggle_frame_outside', 'Chung', 'Outside card hiện tại', 'KeyO', 'dock'],
         ['undo', 'Chung', 'Undo', 'Mod+KeyZ', 'dock'],
         ['redo', 'Chung', 'Redo', 'Mod+KeyY', 'dock'],
-        ['layout', 'Bố cục', 'Sắp xếp màn hình 3D', 'Alt+KeyT', 'editor'],
+        ['layout', 'Bố cục', 'Bật/tắt Split View 3D', 'Alt+KeyT', 'editor'],
         ['rotate_z_left', 'Xoay', 'Xoay trái quanh Z', 'KeyQ', 'editor'],
         ['rotate_z_right', 'Xoay', 'Xoay phải quanh Z', 'KeyW', 'editor'],
         ['rotate_side_left', 'Xoay', 'Xoay trái mặt Side', 'KeyE', 'editor'],

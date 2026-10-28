@@ -814,6 +814,71 @@
   }
 }
 
+/* Split View ported from CVAT-prelabel-analysis: 3D 52% left, projections 48% right. */
+body.cvat-qaqc-split-layout-active .cvat-canvas-grid-root {
+  position: relative !important;
+  width: 100% !important;
+  height: 100% !important;
+}
+
+body.cvat-qaqc-split-layout-active .cvat-grid-item-drag-handler,
+body.cvat-qaqc-split-layout-active .cvat-grid-item-resize-handler,
+body.cvat-qaqc-split-layout-active .cvat-grid-item-fullscreen-handler,
+body.cvat-qaqc-split-layout-active .cvat-grid-item-close-button {
+  display: none !important;
+}
+
+body.cvat-qaqc-split-layout-active [data-qaqc-view="perspective"] {
+  position: absolute !important;
+  left: 4px !important;
+  top: 4px !important;
+  width: calc(52% - 6px) !important;
+  height: calc(100% - 8px) !important;
+  transform: none !important;
+  z-index: 2 !important;
+  box-sizing: border-box !important;
+}
+
+body.cvat-qaqc-split-layout-active [data-qaqc-view="top"] {
+  position: absolute !important;
+  left: calc(52% + 2px) !important;
+  top: 4px !important;
+  width: calc(48% - 6px) !important;
+  height: calc(58% - 6px) !important;
+  transform: none !important;
+  z-index: 2 !important;
+  box-sizing: border-box !important;
+}
+
+body.cvat-qaqc-split-layout-active [data-qaqc-view="side"] {
+  position: absolute !important;
+  left: calc(52% + 2px) !important;
+  top: calc(58% + 2px) !important;
+  width: calc(24% - 4px) !important;
+  height: calc(42% - 6px) !important;
+  transform: none !important;
+  z-index: 2 !important;
+  box-sizing: border-box !important;
+}
+
+body.cvat-qaqc-split-layout-active [data-qaqc-view="front"] {
+  position: absolute !important;
+  left: calc(76% + 2px) !important;
+  top: calc(58% + 2px) !important;
+  width: calc(24% - 6px) !important;
+  height: calc(42% - 6px) !important;
+  transform: none !important;
+  z-index: 2 !important;
+  box-sizing: border-box !important;
+}
+
+body.cvat-qaqc-split-layout-active .cvat-objects-sidebar.ant-layout-sider-collapsed {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  flex: 0 0 0 !important;
+}
+
 .cvat-qaqc-select {
   color-scheme: dark;
   height: 24px;

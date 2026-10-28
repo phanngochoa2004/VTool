@@ -577,7 +577,7 @@ class MacOSDock {
             [['Shift', 'G'], 'Khôi phục lần đồng bộ kích thước gần nhất trong phiên.'],
             [['P'], 'Bật hoặc tắt Outside trên toàn bộ keyframe cùng Track.'],
             [['Shift', 'P'], 'Khôi phục lần Outside toàn Track gần nhất trong phiên.'],
-            [['Alt', 'T'], 'Sắp xếp 3D trái, Top trên phải, Side/Front dưới phải.']
+            [['Alt', 'T'], 'Bật/tắt Split View: 3D trái 52%, Top phải trên, Side/Front phải dưới.']
         ]);
 
         const note = create('p', 'cvat-qaqc-help-note', 'Phím chỉnh box không tự lặp khi giữ. Phím bị khóa khi đang nhập liệu, mở hộp thoại, kéo chuột hoặc box không thể chỉnh sửa.');

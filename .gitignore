@@ -1,5 +1,6 @@
-# Test and coverage output
-coverage/
+# Chrome extension test and coverage output
+/chrome-extension/coverage/
+/chrome-extension/test-results/
 
 # Logs
 *.log
@@ -11,10 +12,10 @@ coverage/
 *.local
 
 # Temporary files and caches
-.cache/
-.tmp/
-tmp/
-temp/
+/chrome-extension/.cache/
+/chrome-extension/.tmp/
+/chrome-extension/tmp/
+/chrome-extension/temp/
 *.tmp
 *.temp
 *.swp
@@ -31,8 +32,10 @@ temp/
 Thumbs.db
 Desktop.ini
 
-# Packaged extension artifacts
-*.crx
-*.pem
-*.zip
+# Generated/packaged Chrome extension artifacts
+/chrome-extension/dist/
+/chrome-extension/build/
+/chrome-extension/*.crx
+/chrome-extension/*.pem
+/chrome-extension/*.zip
 
