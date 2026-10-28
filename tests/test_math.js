@@ -593,4 +593,41 @@ console.assert(updateDataCount === 2, 'updateFramesData should delegate to refre
 console.assert(mockDockInstance.state.framesData.length === 2, 'state.framesData updated');
 console.log('✓ MacOSDock updateFramesData & refreshTrackData compatibility passed');
 
+// 20. Test TrackReader.applySizeToTrack and realtime visual box resizing
+TrackReader.currentTrackData = {
+    clientID: 777,
+    shapes: [
+        { frame: 0, points: [0, 0, 0, 0, 0, 0, 2.0, 4.0, 1.5], outside: false },
+        { frame: 10, points: [10, 20, 0, 0, 0, 0, 2.0, 4.0, 1.5], outside: false }
+    ],
+    startFrame: 0,
+    stopFrame: 10,
+    label: { name: 'Vehicle', color: '#0A84FF' }
+};
+
+const fixedFrames = TrackReader.applySizeToTrack(777, { sx: 1.85, sy: 4.75, sz: 1.62 });
+console.assert(fixedFrames && fixedFrames.length === 11, `Expected 11 frames, got ${fixedFrames?.length}`);
+for (const f of fixedFrames) {
+    console.assert(Math.abs(f.box.sx - 1.85) < 1e-4, `Frame ${f.frame} sx mismatch: ${f.box.sx}`);
+    console.assert(Math.abs(f.box.sy - 4.75) < 1e-4, `Frame ${f.frame} sy mismatch: ${f.box.sy}`);
+    console.assert(Math.abs(f.box.sz - 1.62) < 1e-4, `Frame ${f.frame} sz mismatch: ${f.box.sz}`);
+}
+console.log('✓ TrackReader.applySizeToTrack fixed dimensions across all track frames');
+
+// Test OrthoCanvasRenderer visual box expansion/contraction with referenceBox
+const refBox = { sx: 2.0, sy: 4.0, sz: 1.5 };
+const smallBox = { sx: 1.0, sy: 2.0, sz: 1.5 };
+const bigBox = { sx: 3.0, sy: 6.0, sz: 1.5 };
+
+const baseM = OrthoCanvasRenderer.getMetrics(mockCanvas, refBox, 'top', { referenceBox: refBox });
+const smallM = OrthoCanvasRenderer.getMetrics(mockCanvas, smallBox, 'top', { referenceBox: refBox });
+const bigM = OrthoCanvasRenderer.getMetrics(mockCanvas, bigBox, 'top', { referenceBox: refBox });
+
+console.assert(Math.abs(baseM.scale - smallM.scale) < 1e-5, 'Scale remains constant across dimension changes');
+console.assert(Math.abs(baseM.scale - bigM.scale) < 1e-5, 'Scale remains constant across dimension changes');
+console.assert(smallM.boxPxW < baseM.boxPxW, 'Smaller box has smaller drawn pixel width in realtime');
+console.assert(bigM.boxPxW > baseM.boxPxW, 'Bigger box has larger drawn pixel width in realtime');
+console.assert(Math.abs(bigM.boxPxW / baseM.boxPxW - 1.5) < 1e-4, 'Box width scales proportionally (1.5x)');
+console.log('✓ OrthoCanvasRenderer realtime visual box expansion/contraction with referenceBox passed');
+
 console.log('All Unit Tests Passed Successfully!');

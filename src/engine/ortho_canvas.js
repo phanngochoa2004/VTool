@@ -41,14 +41,36 @@ export class OrthoCanvasRenderer {
             dimV = sz;
         }
 
+        // Reference box for stable metric scale (pixels per meter).
+        // Prevents box pixels from cancelling out dimensions, ensuring box expands/contracts in realtime.
+        const refBox = options.referenceBox || box || {};
+        const refSx = typeof refBox.sx === 'number' ? refBox.sx : sx;
+        const refSy = typeof refBox.sy === 'number' ? refBox.sy : sy;
+        const refSz = typeof refBox.sz === 'number' ? refBox.sz : sz;
+
+        let refDimH = dimH;
+        let refDimV = dimV;
+        if (viewType === 'top') {
+            refDimH = refSx;
+            refDimV = refSy;
+        } else if (viewType === 'front') {
+            refDimH = refSy;
+            refDimV = refSz;
+        } else if (viewType === 'side') {
+            refDimH = refSx;
+            refDimV = refSz;
+        }
+
         const marginFactor = options.marginFactor || 1.35;
         const padding = 14;
         const availW = Math.max(10, width - padding * 2);
         const availH = Math.max(10, height - padding * 2);
-        const maxExtentH = dimH * marginFactor;
-        const maxExtentV = dimV * marginFactor;
+        const maxExtentH = Math.max(0.2, refDimH) * marginFactor;
+        const maxExtentV = Math.max(0.2, refDimV) * marginFactor;
 
-        const scale = Math.min(availW / maxExtentH, availH / maxExtentV) * zoom;
+        const scale = (typeof options.scale === 'number' && options.scale > 0)
+            ? options.scale
+            : Math.min(availW / maxExtentH, availH / maxExtentV) * zoom;
         const centerX = width / 2;
         const centerY = height / 2;
 

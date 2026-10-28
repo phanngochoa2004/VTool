@@ -329,13 +329,22 @@ export class MacOSDock {
                 if (domSize) {
                     SizeClipboard.copy(domSize);
                     copySizeBtn.classList.add('success-flash');
-                    copySizeBtn.textContent = '✓ Copy!';
+                    copySizeBtn.textContent = `✓ ${domSize.sx}×${domSize.sy}×${domSize.sz}m`;
                     setTimeout(() => {
                         copySizeBtn.classList.remove('success-flash');
                         copySizeBtn.textContent = '📋 Copy';
-                    }, 1200);
+                    }, 1500);
                 }
             }
+        });
+
+        // Apply / Fix Size to All Frames Button
+        const fixAllBtn = document.createElement('button');
+        fixAllBtn.className = 'cvat-qaqc-btn cvat-qaqc-fix-all-btn';
+        fixAllBtn.textContent = '⚡ Cố định size (All)';
+        fixAllBtn.title = 'Cố định kích thước từ clipboard cho TẤT CẢ các frame của track này (Realtime)';
+        fixAllBtn.addEventListener('click', async () => {
+            await this.applySizeToAllFrames(fixAllBtn);
         });
 
         // Jump to Active Frame Button
@@ -357,6 +366,7 @@ export class MacOSDock {
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
         rightGroup.appendChild(copySizeBtn);
+        rightGroup.appendChild(fixAllBtn);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(hideBtn);
 
@@ -454,33 +464,59 @@ export class MacOSDock {
     }
 
     /**
-     * Paste dimensions from clipboard to ALL loaded cards of the current track
+     * Apply dimensions across ALL frames of the current track in realtime
+     * @param {HTMLElement|null} btn
+     * @param {Object|null} customSize
      */
-    async pasteSizeToAllCards(btn = null) {
-        const size = await SizeClipboard.get();
+    async applySizeToAllFrames(btn = null, customSize = null) {
+        let size = customSize || await SizeClipboard.get();
         if (!size) {
-            console.warn('[CVAT-QAQC] No size in clipboard to paste');
+            const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
+            if (activeCard?.data?.box) {
+                size = SizeClipboard.copy(activeCard.data.box);
+            }
+        }
+        if (!size) {
+            console.warn('[CVAT-QAQC] No size available to apply');
+            if (btn) {
+                const origText = btn.textContent;
+                btn.textContent = '⚠️ Chưa có size!';
+                setTimeout(() => { btn.textContent = origText; }, 1200);
+            }
             return;
         }
 
-        let updated = 0;
-        for (const card of this.cards.values()) {
-            if (card && typeof card.pasteSize === 'function') {
-                card.pasteSize(size);
-                updated++;
+        const clientID = this.state.activeClientID;
+        if (clientID === null || typeof clientID === 'undefined') return;
+
+        if (typeof this.callbacks.onApplySizeToTrack === 'function') {
+            await this.callbacks.onApplySizeToTrack(clientID, size);
+        } else {
+            // Local fallback
+            for (const card of this.cards.values()) {
+                if (card && typeof card.pasteSize === 'function') {
+                    card.pasteSize(size);
+                }
             }
         }
 
         if (btn) {
-            const origHTML = btn.innerHTML;
+            const origText = btn.textContent;
             btn.classList.add('success-flash');
-            btn.innerHTML = `✓ Đã dán ${updated}f!`;
+            btn.textContent = `✓ Đã cố định ${size.sx}×${size.sy}×${size.sz}m!`;
             setTimeout(() => {
                 btn.classList.remove('success-flash');
-                btn.innerHTML = origHTML;
+                btn.textContent = origText;
             }, 1500);
         }
-        console.log(`[CVAT-QAQC] Pasted size (${size.sx} × ${size.sy} × ${size.sz}m) to ${updated} frames`);
+        console.log(`[CVAT-QAQC] Fixed size (${size.sx} × ${size.sy} × ${size.sz}m) to track #${clientID} realtime`);
+    }
+
+    /**
+     * Paste dimensions from clipboard to ALL loaded cards of the current track
+     */
+    async pasteSizeToAllCards(btn = null) {
+        return this.applySizeToAllFrames(btn);
     }
 
     /**
@@ -652,8 +688,8 @@ export class MacOSDock {
                         this.callbacks.onUpdateCuboid(frame, this.state.activeClientID, newPoints, newBox);
                     }
                 },
-                (sizeObj) => {
-                    this.pasteSizeToAllCards(null);
+                async (sizeObj) => {
+                    await this.applySizeToAllFrames(null, sizeObj);
                 },
                 (frame, outside) => {
                     if (typeof this.callbacks.onUpdateOutside === 'function') {

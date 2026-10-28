@@ -347,8 +347,9 @@ export class CVATHook {
                 return false;
             }
 
-            // 2. Update points in-place
+            // 2. Update points in-place and mark keyframe
             targetState.points = [...newPoints];
+            targetState.keyframe = true;
 
             // 3. Save to CVAT client-side AnnotationsCollection (0 HTTP requests)
             await targetState.save();
@@ -373,8 +374,25 @@ export class CVATHook {
                 }
             }
 
-            // 5. If this is the active frame in CVAT's main viewport, notify canvas
+            // 5. If this is the active frame in CVAT's main viewport, trigger realtime 3D canvas redraw
             if (frameNumber === this.currentFrame && this.canvasInstance) {
+                try {
+                    if (this.jobInstance?.frames?.get) {
+                        const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                        const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                        const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                        const statesToRender = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                        if (typeof this.canvasInstance.setup === 'function') {
+                            this.canvasInstance.setup(frameData, statesToRender);
+                        }
+                        if (typeof this.canvasInstance.render === 'function') {
+                            this.canvasInstance.render();
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] Canvas3D realtime render error:', e);
+                }
+
                 const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
                 const perspective = canvasDOM?.perspective;
                 if (perspective) {
@@ -474,6 +492,91 @@ export class CVATHook {
             return true;
         } catch (err) {
             console.error('[CVAT-QAQC] Failed to update in-memory outside:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Apply new dimensions across all keyframes of a track in CVAT in-memory AnnotationsCollection
+     * Synchronizes Redux and triggers realtime redraw of CVAT Canvas3D.
+     * @param {number} clientID
+     * @param {Object} sizeObj - { sx, sy, sz }
+     * @param {Array<number>} [keyframeNumbers] - list of keyframe frame numbers
+     * @returns {Promise<boolean>}
+     */
+    async applySizeToTrack(clientID, sizeObj, keyframeNumbers = []) {
+        if (!this.jobInstance || clientID === null || typeof clientID === 'undefined') {
+            return false;
+        }
+
+        const sx = parseFloat(Number(sizeObj?.sx ?? sizeObj?.w).toFixed(3));
+        const sy = parseFloat(Number(sizeObj?.sy ?? sizeObj?.l).toFixed(3));
+        const sz = parseFloat(Number(sizeObj?.sz ?? sizeObj?.h).toFixed(3));
+
+        if (isNaN(sx) || isNaN(sy) || isNaN(sz) || sx <= 0 || sy <= 0 || sz <= 0) {
+            return false;
+        }
+
+        try {
+            // 1. Gather all frames to update: keyframeNumbers + currentFrame
+            const framesToUpdate = new Set(keyframeNumbers);
+            if (this.currentFrame !== null && typeof this.currentFrame !== 'undefined') {
+                framesToUpdate.add(this.currentFrame);
+            }
+
+            for (const f of framesToUpdate) {
+                try {
+                    const states = await this.jobInstance.annotations.get(f, true, []);
+                    if (!Array.isArray(states)) continue;
+                    const state = states.find(s => s.clientID === clientID);
+                    if (state && Array.isArray(state.points) && state.points.length >= 9) {
+                        state.points[6] = sx;
+                        state.points[7] = sy;
+                        state.points[8] = sz;
+                        state.keyframe = true;
+                        await state.save();
+                    }
+                } catch (e) {
+                    console.warn(`[CVAT-QAQC] Failed to save size on frame #${f}:`, e);
+                }
+            }
+
+            // 2. Refresh CVAT Canvas3D for the current frame in realtime
+            if (this.canvasInstance && this.jobInstance) {
+                try {
+                    const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToRender = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                    if (typeof this.canvasInstance.setup === 'function') {
+                        this.canvasInstance.setup(frameData, statesToRender);
+                    }
+                    if (typeof this.canvasInstance.render === 'function') {
+                        this.canvasInstance.render();
+                    }
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] Canvas3D refresh error:', e);
+                }
+            }
+
+            // 3. Dispatch Redux update for history and sidebar inputs
+            if (this.store && this.jobInstance?.actions) {
+                try {
+                    const history = await this.jobInstance.actions.get();
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: { states: statesToPush, history }
+                    });
+                } catch (e) {}
+            }
+
+            console.log(`[CVAT-QAQC] Applied size (${sx} × ${sy} × ${sz}m) to Track #${clientID} across ${framesToUpdate.size} frames in-memory`);
+            return true;
+        } catch (err) {
+            console.error('[CVAT-QAQC] applySizeToTrack error:', err);
             return false;
         }
     }

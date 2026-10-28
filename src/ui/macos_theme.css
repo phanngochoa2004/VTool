@@ -868,6 +868,30 @@
   border-color: rgba(10, 132, 255, 0.4);
 }
 
+.cvat-qaqc-apply-all-btn {
+  background: rgba(255, 159, 10, 0.12);
+  border-color: rgba(255, 159, 10, 0.35);
+  color: #FF9F0A;
+}
+
+.cvat-qaqc-apply-all-btn:hover {
+  background: rgba(255, 159, 10, 0.25);
+  border-color: rgba(255, 159, 10, 0.6);
+  color: #FFD60A;
+}
+
+.cvat-qaqc-fix-all-btn {
+  background: rgba(255, 159, 10, 0.14);
+  border-color: rgba(255, 159, 10, 0.4);
+  color: #FF9F0A;
+}
+
+.cvat-qaqc-fix-all-btn:hover {
+  background: rgba(255, 159, 10, 0.28);
+  border-color: rgba(255, 159, 10, 0.7);
+  color: #FFD60A;
+}
+
 .cvat-qaqc-paste-all-btn {
   height: 20px;
   padding: 0 8px;

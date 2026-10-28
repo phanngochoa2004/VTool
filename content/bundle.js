@@ -485,14 +485,36 @@ class OrthoCanvasRenderer {
             dimV = sz;
         }
 
+        // Reference box for stable metric scale (pixels per meter).
+        // Prevents box pixels from cancelling out dimensions, ensuring box expands/contracts in realtime.
+        const refBox = options.referenceBox || box || {};
+        const refSx = typeof refBox.sx === 'number' ? refBox.sx : sx;
+        const refSy = typeof refBox.sy === 'number' ? refBox.sy : sy;
+        const refSz = typeof refBox.sz === 'number' ? refBox.sz : sz;
+
+        let refDimH = dimH;
+        let refDimV = dimV;
+        if (viewType === 'top') {
+            refDimH = refSx;
+            refDimV = refSy;
+        } else if (viewType === 'front') {
+            refDimH = refSy;
+            refDimV = refSz;
+        } else if (viewType === 'side') {
+            refDimH = refSx;
+            refDimV = refSz;
+        }
+
         const marginFactor = options.marginFactor || 1.35;
         const padding = 14;
         const availW = Math.max(10, width - padding * 2);
         const availH = Math.max(10, height - padding * 2);
-        const maxExtentH = dimH * marginFactor;
-        const maxExtentV = dimV * marginFactor;
+        const maxExtentH = Math.max(0.2, refDimH) * marginFactor;
+        const maxExtentV = Math.max(0.2, refDimV) * marginFactor;
 
-        const scale = Math.min(availW / maxExtentH, availH / maxExtentV) * zoom;
+        const scale = (typeof options.scale === 'number' && options.scale > 0)
+            ? options.scale
+            : Math.min(availW / maxExtentH, availH / maxExtentV) * zoom;
         const centerX = width / 2;
         const centerY = height / 2;
 
@@ -1516,6 +1538,43 @@ class TrackReader {
     }
 
     /**
+     * Apply new dimensions across all keyframes and re-interpolate entire track in < 1ms
+     * @param {number} clientID
+     * @param {Object} sizeObj - { sx, sy, sz } or { w, l, h }
+     * @returns {Array<Object>|null} Updated frames data list
+     */
+    static applySizeToTrack(clientID, sizeObj) {
+        if (!TrackReader.currentTrackData || TrackReader.currentTrackData.clientID !== clientID) {
+            return null;
+        }
+
+        const sx = parseFloat(Number(sizeObj?.sx ?? sizeObj?.w).toFixed(3));
+        const sy = parseFloat(Number(sizeObj?.sy ?? sizeObj?.l).toFixed(3));
+        const sz = parseFloat(Number(sizeObj?.sz ?? sizeObj?.h).toFixed(3));
+
+        if (isNaN(sx) || isNaN(sy) || isNaN(sz) || sx <= 0 || sy <= 0 || sz <= 0) {
+            return null;
+        }
+
+        const shapes = TrackReader.currentTrackData.shapes;
+        for (const s of shapes) {
+            if (Array.isArray(s.points) && s.points.length >= 9) {
+                s.points[6] = sx;
+                s.points[7] = sy;
+                s.points[8] = sz;
+            }
+        }
+
+        // Re-interpolate all frames in < 0.1ms
+        return TrackReader.interpolateTrack(
+            shapes,
+            TrackReader.currentTrackData.startFrame,
+            TrackReader.currentTrackData.stopFrame,
+            TrackReader.currentTrackData.label
+        );
+    }
+
+    /**
      * Parse CVAT 3D cuboid points array [x, y, z, rx, ry, rz, sx, sy, sz, ...]
      * @param {number[]} points
      * @returns {{ x: number, y: number, z: number, rx: number, ry: number, rz: number, sx: number, sy: number, sz: number }}
@@ -1906,8 +1965,9 @@ class CVATHook {
                 return false;
             }
 
-            // 2. Update points in-place
+            // 2. Update points in-place and mark keyframe
             targetState.points = [...newPoints];
+            targetState.keyframe = true;
 
             // 3. Save to CVAT client-side AnnotationsCollection (0 HTTP requests)
             await targetState.save();
@@ -1932,8 +1992,25 @@ class CVATHook {
                 }
             }
 
-            // 5. If this is the active frame in CVAT's main viewport, notify canvas
+            // 5. If this is the active frame in CVAT's main viewport, trigger realtime 3D canvas redraw
             if (frameNumber === this.currentFrame && this.canvasInstance) {
+                try {
+                    if (this.jobInstance?.frames?.get) {
+                        const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                        const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                        const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                        const statesToRender = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                        if (typeof this.canvasInstance.setup === 'function') {
+                            this.canvasInstance.setup(frameData, statesToRender);
+                        }
+                        if (typeof this.canvasInstance.render === 'function') {
+                            this.canvasInstance.render();
+                        }
+                    }
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] Canvas3D realtime render error:', e);
+                }
+
                 const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
                 const perspective = canvasDOM?.perspective;
                 if (perspective) {
@@ -2033,6 +2110,91 @@ class CVATHook {
             return true;
         } catch (err) {
             console.error('[CVAT-QAQC] Failed to update in-memory outside:', err);
+            return false;
+        }
+    }
+
+    /**
+     * Apply new dimensions across all keyframes of a track in CVAT in-memory AnnotationsCollection
+     * Synchronizes Redux and triggers realtime redraw of CVAT Canvas3D.
+     * @param {number} clientID
+     * @param {Object} sizeObj - { sx, sy, sz }
+     * @param {Array<number>} [keyframeNumbers] - list of keyframe frame numbers
+     * @returns {Promise<boolean>}
+     */
+    async applySizeToTrack(clientID, sizeObj, keyframeNumbers = []) {
+        if (!this.jobInstance || clientID === null || typeof clientID === 'undefined') {
+            return false;
+        }
+
+        const sx = parseFloat(Number(sizeObj?.sx ?? sizeObj?.w).toFixed(3));
+        const sy = parseFloat(Number(sizeObj?.sy ?? sizeObj?.l).toFixed(3));
+        const sz = parseFloat(Number(sizeObj?.sz ?? sizeObj?.h).toFixed(3));
+
+        if (isNaN(sx) || isNaN(sy) || isNaN(sz) || sx <= 0 || sy <= 0 || sz <= 0) {
+            return false;
+        }
+
+        try {
+            // 1. Gather all frames to update: keyframeNumbers + currentFrame
+            const framesToUpdate = new Set(keyframeNumbers);
+            if (this.currentFrame !== null && typeof this.currentFrame !== 'undefined') {
+                framesToUpdate.add(this.currentFrame);
+            }
+
+            for (const f of framesToUpdate) {
+                try {
+                    const states = await this.jobInstance.annotations.get(f, true, []);
+                    if (!Array.isArray(states)) continue;
+                    const state = states.find(s => s.clientID === clientID);
+                    if (state && Array.isArray(state.points) && state.points.length >= 9) {
+                        state.points[6] = sx;
+                        state.points[7] = sy;
+                        state.points[8] = sz;
+                        state.keyframe = true;
+                        await state.save();
+                    }
+                } catch (e) {
+                    console.warn(`[CVAT-QAQC] Failed to save size on frame #${f}:`, e);
+                }
+            }
+
+            // 2. Refresh CVAT Canvas3D for the current frame in realtime
+            if (this.canvasInstance && this.jobInstance) {
+                try {
+                    const frameData = await this.jobInstance.frames.get(this.currentFrame);
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToRender = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                    if (typeof this.canvasInstance.setup === 'function') {
+                        this.canvasInstance.setup(frameData, statesToRender);
+                    }
+                    if (typeof this.canvasInstance.render === 'function') {
+                        this.canvasInstance.render();
+                    }
+                } catch (e) {
+                    console.warn('[CVAT-QAQC] Canvas3D refresh error:', e);
+                }
+            }
+
+            // 3. Dispatch Redux update for history and sidebar inputs
+            if (this.store && this.jobInstance?.actions) {
+                try {
+                    const history = await this.jobInstance.actions.get();
+                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                    this.store.dispatch({
+                        type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                        payload: { states: statesToPush, history }
+                    });
+                } catch (e) {}
+            }
+
+            console.log(`[CVAT-QAQC] Applied size (${sx} × ${sy} × ${sz}m) to Track #${clientID} across ${framesToUpdate.size} frames in-memory`);
+            return true;
+        } catch (err) {
+            console.error('[CVAT-QAQC] applySizeToTrack error:', err);
             return false;
         }
     }
@@ -2788,11 +2950,21 @@ class FrameCard {
         // Paste Size Button (Compact)
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-paste-size-btn';
-        pasteBtn.textContent = '📄 Paste';
-        pasteBtn.title = 'Dán kích thước từ clipboard vào cuboid trên frame này';
+        pasteBtn.textContent = '📄 Dán';
+        pasteBtn.title = 'Dán kích thước từ clipboard vào cuboid trên frame này (Realtime)';
         pasteBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             await this.handlePasteSize(pasteBtn);
+        });
+
+        // Fix / Apply to All Frames Button (Compact)
+        const fixAllBtn = document.createElement('button');
+        fixAllBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-apply-all-btn';
+        fixAllBtn.textContent = '⚡ Cố định All';
+        fixAllBtn.title = 'Cố định kích thước của frame này cho TẤT CẢ các frame của track (Realtime)';
+        fixAllBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await this.handlePasteSizeToAll(fixAllBtn);
         });
 
         // Jump Button
@@ -2808,6 +2980,7 @@ class FrameCard {
         rightGroup.appendChild(outsideBtn);
         rightGroup.appendChild(copyBtn);
         rightGroup.appendChild(pasteBtn);
+        rightGroup.appendChild(fixAllBtn);
         rightGroup.appendChild(jumpBtn);
 
         header.appendChild(leftGroup);
@@ -3012,11 +3185,11 @@ class FrameCard {
         if (btn) {
             const origHTML = btn.innerHTML;
             btn.classList.add('success-flash');
-            btn.innerHTML = '✓ Đã Copy!';
+            btn.innerHTML = `✓ ${res.sx}×${res.sy}×${res.sz}m`;
             setTimeout(() => {
                 btn.classList.remove('success-flash');
                 btn.innerHTML = origHTML;
-            }, 1200);
+            }, 1500);
         }
     }
 
@@ -3075,14 +3248,13 @@ class FrameCard {
      * Paste current frame dimensions to ALL loaded frames of this track
      */
     async handlePasteSizeToAll(btn) {
-        let size = await SizeClipboard.get();
-        if (!size && this.data.box) {
-            size = SizeClipboard.copy(this.data.box);
-        }
+        if (!this.data.box) return;
+        let size = SizeClipboard.copy(this.data.box);
+        if (!size) size = await SizeClipboard.get();
         if (!size) return;
 
         if (typeof this.onPasteSizeToAll === 'function') {
-            this.onPasteSizeToAll(size);
+            await this.onPasteSizeToAll(size);
         } else {
             this.pasteSize(size);
         }
@@ -3090,11 +3262,11 @@ class FrameCard {
         if (btn) {
             const origHTML = btn.innerHTML;
             btn.classList.add('success-flash');
-            btn.innerHTML = '✓ Đã dán tất cả!';
+            btn.innerHTML = '✓ Đã cố định All!';
             setTimeout(() => {
                 btn.classList.remove('success-flash');
                 btn.innerHTML = origHTML;
-            }, 1400);
+            }, 1500);
         }
     }
 
@@ -3607,6 +3779,7 @@ class FrameCard {
             pointSize,
             color,
             marginFactor: 1.35,
+            referenceBox: this.originalBox || box,
             outside: !!this.data.outside,
             interaction: options.interaction || null
         };
@@ -3958,13 +4131,22 @@ class MacOSDock {
                 if (domSize) {
                     SizeClipboard.copy(domSize);
                     copySizeBtn.classList.add('success-flash');
-                    copySizeBtn.textContent = '✓ Copy!';
+                    copySizeBtn.textContent = `✓ ${domSize.sx}×${domSize.sy}×${domSize.sz}m`;
                     setTimeout(() => {
                         copySizeBtn.classList.remove('success-flash');
                         copySizeBtn.textContent = '📋 Copy';
-                    }, 1200);
+                    }, 1500);
                 }
             }
+        });
+
+        // Apply / Fix Size to All Frames Button
+        const fixAllBtn = document.createElement('button');
+        fixAllBtn.className = 'cvat-qaqc-btn cvat-qaqc-fix-all-btn';
+        fixAllBtn.textContent = '⚡ Cố định size (All)';
+        fixAllBtn.title = 'Cố định kích thước từ clipboard cho TẤT CẢ các frame của track này (Realtime)';
+        fixAllBtn.addEventListener('click', async () => {
+            await this.applySizeToAllFrames(fixAllBtn);
         });
 
         // Jump to Active Frame Button
@@ -3986,6 +4168,7 @@ class MacOSDock {
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
         rightGroup.appendChild(copySizeBtn);
+        rightGroup.appendChild(fixAllBtn);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(hideBtn);
 
@@ -4083,33 +4266,59 @@ class MacOSDock {
     }
 
     /**
-     * Paste dimensions from clipboard to ALL loaded cards of the current track
+     * Apply dimensions across ALL frames of the current track in realtime
+     * @param {HTMLElement|null} btn
+     * @param {Object|null} customSize
      */
-    async pasteSizeToAllCards(btn = null) {
-        const size = await SizeClipboard.get();
+    async applySizeToAllFrames(btn = null, customSize = null) {
+        let size = customSize || await SizeClipboard.get();
         if (!size) {
-            console.warn('[CVAT-QAQC] No size in clipboard to paste');
+            const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
+            if (activeCard?.data?.box) {
+                size = SizeClipboard.copy(activeCard.data.box);
+            }
+        }
+        if (!size) {
+            console.warn('[CVAT-QAQC] No size available to apply');
+            if (btn) {
+                const origText = btn.textContent;
+                btn.textContent = '⚠️ Chưa có size!';
+                setTimeout(() => { btn.textContent = origText; }, 1200);
+            }
             return;
         }
 
-        let updated = 0;
-        for (const card of this.cards.values()) {
-            if (card && typeof card.pasteSize === 'function') {
-                card.pasteSize(size);
-                updated++;
+        const clientID = this.state.activeClientID;
+        if (clientID === null || typeof clientID === 'undefined') return;
+
+        if (typeof this.callbacks.onApplySizeToTrack === 'function') {
+            await this.callbacks.onApplySizeToTrack(clientID, size);
+        } else {
+            // Local fallback
+            for (const card of this.cards.values()) {
+                if (card && typeof card.pasteSize === 'function') {
+                    card.pasteSize(size);
+                }
             }
         }
 
         if (btn) {
-            const origHTML = btn.innerHTML;
+            const origText = btn.textContent;
             btn.classList.add('success-flash');
-            btn.innerHTML = `✓ Đã dán ${updated}f!`;
+            btn.textContent = `✓ Đã cố định ${size.sx}×${size.sy}×${size.sz}m!`;
             setTimeout(() => {
                 btn.classList.remove('success-flash');
-                btn.innerHTML = origHTML;
+                btn.textContent = origText;
             }, 1500);
         }
-        console.log(`[CVAT-QAQC] Pasted size (${size.sx} × ${size.sy} × ${size.sz}m) to ${updated} frames`);
+        console.log(`[CVAT-QAQC] Fixed size (${size.sx} × ${size.sy} × ${size.sz}m) to track #${clientID} realtime`);
+    }
+
+    /**
+     * Paste dimensions from clipboard to ALL loaded cards of the current track
+     */
+    async pasteSizeToAllCards(btn = null) {
+        return this.applySizeToAllFrames(btn);
     }
 
     /**
@@ -4281,8 +4490,8 @@ class MacOSDock {
                         this.callbacks.onUpdateCuboid(frame, this.state.activeClientID, newPoints, newBox);
                     }
                 },
-                (sizeObj) => {
-                    this.pasteSizeToAllCards(null);
+                async (sizeObj) => {
+                    await this.applySizeToAllFrames(null, sizeObj);
                 },
                 (frame, outside) => {
                     if (typeof this.callbacks.onUpdateOutside === 'function') {
@@ -4566,6 +4775,22 @@ class MacOSDock {
 
             // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectOutside(frame, clientID, outside);
+        },
+        onApplySizeToTrack: async (clientID, sizeObj) => {
+            // 1. Instant re-interpolation across dock filmstrip in < 1ms
+            const updatedFrames = TrackReader.applySizeToTrack(clientID, sizeObj);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
+            }
+
+            // 2. Persist to CVAT in-memory AnnotationsCollection and sync Canvas3D/Redux in realtime
+            const kfNumbers = (TrackReader.currentTrackData?.shapes || []).map(s => s.frame);
+            await hook.applySizeToTrack(clientID, sizeObj, kfNumbers);
         }
     });
 

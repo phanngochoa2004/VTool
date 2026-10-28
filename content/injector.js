@@ -145,6 +145,22 @@ import { isAllowedSite } from '../src/config/allowed_sites.js';
 
             // Persist to CVAT in-memory AnnotationsCollection and sync Redux
             await hook.updateObjectOutside(frame, clientID, outside);
+        },
+        onApplySizeToTrack: async (clientID, sizeObj) => {
+            // 1. Instant re-interpolation across dock filmstrip in < 1ms
+            const updatedFrames = TrackReader.applySizeToTrack(clientID, sizeObj);
+            if (updatedFrames && updatedFrames.length > 0) {
+                currentTrackFrames = updatedFrames;
+                if (typeof dock.refreshTrackData === 'function') {
+                    dock.refreshTrackData(updatedFrames);
+                } else if (typeof dock.updateFramesData === 'function') {
+                    dock.updateFramesData(updatedFrames);
+                }
+            }
+
+            // 2. Persist to CVAT in-memory AnnotationsCollection and sync Canvas3D/Redux in realtime
+            const kfNumbers = (TrackReader.currentTrackData?.shapes || []).map(s => s.frame);
+            await hook.applySizeToTrack(clientID, sizeObj, kfNumbers);
         }
     });
 

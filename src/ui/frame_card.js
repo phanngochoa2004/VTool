@@ -151,11 +151,21 @@ export class FrameCard {
         // Paste Size Button (Compact)
         const pasteBtn = document.createElement('button');
         pasteBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-paste-size-btn';
-        pasteBtn.textContent = '📄 Paste';
-        pasteBtn.title = 'Dán kích thước từ clipboard vào cuboid trên frame này';
+        pasteBtn.textContent = '📄 Dán';
+        pasteBtn.title = 'Dán kích thước từ clipboard vào cuboid trên frame này (Realtime)';
         pasteBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             await this.handlePasteSize(pasteBtn);
+        });
+
+        // Fix / Apply to All Frames Button (Compact)
+        const fixAllBtn = document.createElement('button');
+        fixAllBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-apply-all-btn';
+        fixAllBtn.textContent = '⚡ Cố định All';
+        fixAllBtn.title = 'Cố định kích thước của frame này cho TẤT CẢ các frame của track (Realtime)';
+        fixAllBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await this.handlePasteSizeToAll(fixAllBtn);
         });
 
         // Jump Button
@@ -171,6 +181,7 @@ export class FrameCard {
         rightGroup.appendChild(outsideBtn);
         rightGroup.appendChild(copyBtn);
         rightGroup.appendChild(pasteBtn);
+        rightGroup.appendChild(fixAllBtn);
         rightGroup.appendChild(jumpBtn);
 
         header.appendChild(leftGroup);
@@ -375,11 +386,11 @@ export class FrameCard {
         if (btn) {
             const origHTML = btn.innerHTML;
             btn.classList.add('success-flash');
-            btn.innerHTML = '✓ Đã Copy!';
+            btn.innerHTML = `✓ ${res.sx}×${res.sy}×${res.sz}m`;
             setTimeout(() => {
                 btn.classList.remove('success-flash');
                 btn.innerHTML = origHTML;
-            }, 1200);
+            }, 1500);
         }
     }
 
@@ -438,14 +449,13 @@ export class FrameCard {
      * Paste current frame dimensions to ALL loaded frames of this track
      */
     async handlePasteSizeToAll(btn) {
-        let size = await SizeClipboard.get();
-        if (!size && this.data.box) {
-            size = SizeClipboard.copy(this.data.box);
-        }
+        if (!this.data.box) return;
+        let size = SizeClipboard.copy(this.data.box);
+        if (!size) size = await SizeClipboard.get();
         if (!size) return;
 
         if (typeof this.onPasteSizeToAll === 'function') {
-            this.onPasteSizeToAll(size);
+            await this.onPasteSizeToAll(size);
         } else {
             this.pasteSize(size);
         }
@@ -453,11 +463,11 @@ export class FrameCard {
         if (btn) {
             const origHTML = btn.innerHTML;
             btn.classList.add('success-flash');
-            btn.innerHTML = '✓ Đã dán tất cả!';
+            btn.innerHTML = '✓ Đã cố định All!';
             setTimeout(() => {
                 btn.classList.remove('success-flash');
                 btn.innerHTML = origHTML;
-            }, 1400);
+            }, 1500);
         }
     }
 
@@ -970,6 +980,7 @@ export class FrameCard {
             pointSize,
             color,
             marginFactor: 1.35,
+            referenceBox: this.originalBox || box,
             outside: !!this.data.outside,
             interaction: options.interaction || null
         };
