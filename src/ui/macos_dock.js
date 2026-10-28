@@ -325,38 +325,6 @@ export class MacOSDock {
             this.refreshAllCards();
         });
 
-        // Copy Size Button (Active Frame / Cuboid)
-        const copySizeBtn = document.createElement('button');
-        copySizeBtn.className = 'cvat-qaqc-btn cvat-qaqc-copy-size-btn';
-        copySizeBtn.textContent = '📋 Copy';
-        copySizeBtn.title = 'Sao chép kích thước WxLxH của frame đang chọn (Alt+Shift+C)';
-        copySizeBtn.addEventListener('click', () => {
-            const activeCard = this.cards.get(this.state.currentFrame) || this.cards.values().next().value;
-            if (activeCard) {
-                activeCard.handleCopySize(copySizeBtn);
-            } else {
-                const domSize = SizeClipboard.extractFromCvatDom();
-                if (domSize) {
-                    SizeClipboard.copy(domSize);
-                    copySizeBtn.classList.add('success-flash');
-                    copySizeBtn.textContent = `✓ ${domSize.sx}×${domSize.sy}×${domSize.sz}m`;
-                    setTimeout(() => {
-                        copySizeBtn.classList.remove('success-flash');
-                        copySizeBtn.textContent = '📋 Copy';
-                    }, 1500);
-                }
-            }
-        });
-
-        // Apply / Fix Size to All Frames Button
-        const fixAllBtn = document.createElement('button');
-        fixAllBtn.className = 'cvat-qaqc-btn cvat-qaqc-fix-all-btn';
-        fixAllBtn.textContent = '⚡ Cố định size (All)';
-        fixAllBtn.title = 'Cố định kích thước từ clipboard cho TẤT CẢ các frame của track này (Realtime)';
-        fixAllBtn.addEventListener('click', async () => {
-            await this.applySizeToAllFrames(fixAllBtn);
-        });
-
         // Jump to Active Frame Button
         const jumpBtn = document.createElement('button');
         jumpBtn.className = 'cvat-qaqc-btn';
@@ -375,8 +343,6 @@ export class MacOSDock {
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
-        rightGroup.appendChild(copySizeBtn);
-        rightGroup.appendChild(fixAllBtn);
         rightGroup.appendChild(jumpBtn);
         rightGroup.appendChild(hideBtn);
 
