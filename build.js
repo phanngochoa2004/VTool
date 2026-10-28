@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 const srcDir = path.resolve(__dirname, 'src');
 const contentDir = path.resolve(__dirname, 'content');
@@ -57,3 +58,14 @@ bundleCode += `\n})();\n`;
 const outputPath = path.join(contentDir, 'bundle.js');
 fs.writeFileSync(outputPath, bundleCode, 'utf8');
 console.log(`[BUILD] Successfully built ${outputPath} (${bundleCode.length} bytes)`);
+
+// Auto-sync into running CVAT Docker container (cvat_ui) if active
+try {
+    const cssPath = path.join(srcDir, 'ui', 'macos_theme.css');
+    execSync(`docker cp "${outputPath}" cvat_ui:/usr/share/nginx/html/cvat_qaqc_bundle.js`, { stdio: 'pipe' });
+    execSync(`docker cp "${cssPath}" cvat_ui:/usr/share/nginx/html/cvat_qaqc_theme.css`, { stdio: 'pipe' });
+    console.log('[BUILD] Successfully synced bundle & theme to cvat_ui container (/usr/share/nginx/html/)');
+} catch (err) {
+    // Docker or cvat_ui container not running, skip quietly
+    console.log('[BUILD] Note: cvat_ui container not reached (skip docker sync)');
+}
