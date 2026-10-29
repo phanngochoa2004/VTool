@@ -1,5 +1,5 @@
 (async function runBrowserMathTests() {
-const { Math3D, TrackReader, OrthoCanvasRenderer, SizeClipboard, CVATHook, isAllowedSite, ALLOWED_SITES } = window.CVATQAQC;
+const { Math3D, TrackReader, OrthoCanvasRenderer, SizeClipboard, CVATHook, GroundFit, FrameCard, MacOSDock, isAllowedSite, ALLOWED_SITES } = window.CVATQAQC;
 
 console.log('--- Testing 3D Math & Projections ---');
 
@@ -219,6 +219,49 @@ console.assert(redoSuccess === true, 'Redo executed successfully');
 console.assert(redoCalled === true, 'jobInstance.actions.redo() was called');
 console.log('✓ CVAT native Undo/Redo hook & Redux history synchronization passed');
 
+// Visible-frame edits must use CVAT's native canvas update path so the Three.js
+// cuboid moves immediately instead of waiting for a frame change or reload.
+const realtimeHook = new CVATHook();
+const realtimeOldPoints = [0, 0, 1.2, 0, 0, 0, 4.5, 1.8, 1.5];
+const realtimeNewPoints = [0, 0, 0.8, 0.01, -0.02, 0, 4.5, 1.8, 1.5];
+let realtimeSaveCalls = 0;
+let realtimeCanvasCalls = 0;
+const realtimeAnnotationState = {
+    clientID: 77,
+    frame: 5,
+    points: [...realtimeOldPoints],
+    async save() { realtimeSaveCalls++; },
+};
+const realtimeDrawn = {
+    state: { clientID: 77, frame: 5, points: [...realtimeOldPoints] },
+    data: { points: [...realtimeOldPoints] },
+};
+const realtimeCanvas = document.createElement('canvas');
+realtimeCanvas.getDrawnObjects = () => [realtimeDrawn];
+realtimeCanvas.updatePosition = (state, points) => {
+    realtimeCanvasCalls++;
+    state.points = [...points];
+    realtimeDrawn.data.points = [...points];
+    realtimeAnnotationState.points = [...points];
+};
+document.body.appendChild(realtimeCanvas);
+realtimeHook.currentFrame = 5;
+realtimeHook.canvasInstance = { render() {} };
+realtimeHook.jobInstance = {
+    annotations: { get: async () => [realtimeAnnotationState] },
+    actions: { get: async () => ({ undo: [], redo: [] }) },
+};
+realtimeHook.store = { dispatch() {} };
+const realtimeUpdated = await realtimeHook.updateObjectCuboid(5, 77, realtimeNewPoints);
+realtimeCanvas.remove();
+console.assert(realtimeUpdated === true && realtimeCanvasCalls === 1,
+    'Visible frame must update through canvas.updatePosition exactly once');
+console.assert(realtimeSaveCalls === 0,
+    'Visible-frame realtime update must not create a second save/history entry');
+console.assert(CVATHook.sameCuboidPoints(realtimeDrawn.data.points, realtimeNewPoints),
+    'Realtime Three.js geometry must match the requested cuboid points');
+console.log('✓ CVATHook visible-frame cuboid updates through native realtime canvas path');
+
 // 10. Test discrete rotation increments for Top (5°, 90°) and Side/Front (1°, 90°)
 const rotateAngle = (currentVal, deltaRad) => {
     let nextVal = currentVal + deltaRad;
@@ -332,6 +375,41 @@ console.assert(outsideUpdated === true, 'updateObjectOutside returned true');
 console.assert(saveCalled === true, 'targetState.save() was called');
 console.assert(updatedStateOutside === true, 'targetState.outside was updated to true');
 console.log('✓ CVATHook.updateObjectOutside in-memory persistence passed');
+
+// Native CVAT Outside changes must emit a dedicated event even when the
+// Undo/Redo stack lengths do not change.
+let outsideStoreSubscriber = null;
+const outsideReduxState = {
+    annotation: {
+        job: { instance: mockJobForOutside },
+        canvas: { instance: null },
+        player: { frame: { number: 1 } },
+        annotations: {
+            states: [{ clientID: 101, frame: 1, outside: false, points: [1, 2, 3, 0, 0, 0, 2, 4, 1.5] }],
+            activatedStateID: 101,
+            selectedStatesID: [101],
+            history: { undo: [], redo: [] }
+        }
+    }
+};
+const outsideSyncHook = new CVATHook();
+outsideSyncHook.store = {
+    getState: () => outsideReduxState,
+    subscribe: (callback) => { outsideStoreSubscriber = callback; }
+};
+let nativeOutsideEvent = null;
+outsideSyncHook.on('objectOutsideChanged', (event) => { nativeOutsideEvent = event; });
+outsideSyncHook.setupStoreListener();
+outsideReduxState.annotation.annotations.states[0] = {
+    ...outsideReduxState.annotation.annotations.states[0],
+    outside: true
+};
+outsideStoreSubscriber();
+console.assert(nativeOutsideEvent?.clientID === 101 && nativeOutsideEvent.frame === 1 && nativeOutsideEvent.outside === true,
+    'Native CVAT Outside toggle must emit an immediate Inspector synchronization event');
+console.assert(nativeOutsideEvent?.source === 'cvat',
+    'Native Outside synchronization event must identify CVAT as its source');
+console.log('✓ Native CVAT Outside changes emit realtime Inspector synchronization');
 
 // Test that OrthoCanvasRenderer renders the box when outside is true (with dashed border and outside marking)
 let fillRectCalls = [];
@@ -610,6 +688,31 @@ for (const f of fixedFrames) {
 }
 console.log('✓ TrackReader.applySizeToTrack fixed dimensions across all track frames');
 
+// Regression: after fixing all keyframes to one size, a later manual resize must
+// become a new keyframe revision instead of snapping back to the fixed size.
+const resizedAfterSync = [...fixedFrames[5].points];
+resizedAfterSync[6] = 2.15;
+resizedAfterSync[7] = 4.95;
+resizedAfterSync[8] = 1.72;
+const framesAfterManualResize = TrackReader.updateTrackKeyframe(777, 5, resizedAfterSync);
+const manuallyResizedFrame = framesAfterManualResize.find((frame) => frame.frame === 5);
+const cachedManualKeyframe = TrackReader.currentTrackData.shapes.find((shape) => shape.frame === 5);
+console.assert(manuallyResizedFrame?.keyframe === true && cachedManualKeyframe,
+    'Manual resize after sync must promote the edited frame to a cached keyframe');
+console.assert(Math.abs(manuallyResizedFrame.box.sx - 2.15) < 1e-9 &&
+    Math.abs(manuallyResizedFrame.box.sy - 4.95) < 1e-9 &&
+    Math.abs(manuallyResizedFrame.box.sz - 1.72) < 1e-9,
+    'Manual size revision must remain visible after track re-interpolation');
+const rerenderedAfterManualResize = TrackReader.interpolateTrack(
+    TrackReader.currentTrackData.shapes,
+    TrackReader.currentTrackData.startFrame,
+    TrackReader.currentTrackData.stopFrame,
+    TrackReader.currentTrackData.label,
+);
+console.assert(Math.abs(rerenderedAfterManualResize[5].box.sx - 2.15) < 1e-9,
+    'A subsequent UI render must not restore the previous synchronized size');
+console.log('✓ Manual resize after track-size sync persists across UI re-render');
+
 // Test OrthoCanvasRenderer visual box expansion/contraction with referenceBox
 const refBox = { sx: 2.0, sy: 4.0, sz: 1.5 };
 const smallBox = { sx: 1.0, sy: 2.0, sz: 1.5 };
@@ -625,6 +728,79 @@ console.assert(smallM.boxPxW < baseM.boxPxW, 'Smaller box has smaller drawn pixe
 console.assert(bigM.boxPxW > baseM.boxPxW, 'Bigger box has larger drawn pixel width in realtime');
 console.assert(Math.abs(bigM.boxPxW / baseM.boxPxW - 1.5) < 1e-4, 'Box width scales proportionally (1.5x)');
 console.log('✓ OrthoCanvasRenderer realtime visual box expansion/contraction with referenceBox passed');
+
+// Large three-view cards should use most of both axes without distorting geometry.
+const largeViewCanvas = { clientWidth: 286, clientHeight: 238, width: 286, height: 238 };
+const nearSquareBox = { sx: 1.11, sy: 1.06, sz: 1.0 };
+const fittedTop = OrthoCanvasRenderer.getMetrics(largeViewCanvas, nearSquareBox, 'top', {
+    referenceBox: nearSquareBox,
+    marginFactor: 1.10,
+});
+const fittedWidthRatio = fittedTop.boxPxW / largeViewCanvas.clientWidth;
+const fittedHeightRatio = fittedTop.boxPxH / largeViewCanvas.clientHeight;
+console.assert(fittedWidthRatio >= 0.68 && fittedWidthRatio <= 1,
+    `Large-card box should fill horizontal space without clipping, got ${fittedWidthRatio}`);
+console.assert(fittedHeightRatio >= 0.78 && fittedHeightRatio <= 1,
+    `Large-card box should fill vertical space without clipping, got ${fittedHeightRatio}`);
+console.assert(Math.abs((fittedTop.boxPxW / fittedTop.boxPxH) - (nearSquareBox.sx / nearSquareBox.sy)) < 1e-9,
+    'Auto-fit must preserve the projected box aspect ratio');
+console.log('✓ Large-card balanced horizontal/vertical fit preserves aspect ratio');
+
+// Hit-testing must use the same projection as the visible red corner handles.
+// This guards against regressions where drawing uses the fitted 1.10 margin and
+// a stable reference box, but pointer hover silently falls back to other values.
+const hitTestCard = Object.create(FrameCard.prototype);
+hitTestCard.data = {
+    box: { x: 0, y: 0, z: 0, sx: 1.45, sy: 0.82, sz: 1.0 },
+};
+hitTestCard.originalBox = { x: 0, y: 0, z: 0, sx: 1.11, sy: 1.06, sz: 1.0 };
+hitTestCard.lastRenderOptions = { zoom: 1.0 };
+const visibleHandleMetrics = OrthoCanvasRenderer.getMetrics(
+    largeViewCanvas,
+    hitTestCard.data.box,
+    'top',
+    {
+        zoom: 1.0,
+        marginFactor: 1.10,
+        referenceBox: hitTestCard.originalBox,
+    },
+);
+const pointerHandleMetrics = hitTestCard.getInteractionMetrics(largeViewCanvas, 'top');
+for (const cornerKey of ['tl', 'tr', 'bl', 'br']) {
+    console.assert(
+        Math.abs(pointerHandleMetrics.corners[cornerKey].x - visibleHandleMetrics.corners[cornerKey].x) < 1e-9 &&
+        Math.abs(pointerHandleMetrics.corners[cornerKey].y - visibleHandleMetrics.corners[cornerKey].y) < 1e-9,
+        `Pointer hit target must overlap visible ${cornerKey} handle`,
+    );
+}
+console.log('✓ FrameCard pointer hit targets overlap all visible corner handles');
+
+// A grown box must be used as the viewport reference so corner handles keep a
+// safe gutter instead of being clipped against the canvas edges.
+const safeViewportCard = Object.create(FrameCard.prototype);
+safeViewportCard.data = { box: { sx: 2.4, sy: 1.8, sz: 1.4 } };
+safeViewportCard.originalBox = { sx: 1.1, sy: 1.0, sz: 1.0 };
+safeViewportCard.lastRenderOptions = { zoom: 1 };
+safeViewportCard.viewZoom = { top: 1, side: 1, front: 1 };
+const safeReference = safeViewportCard.getViewportReferenceBox();
+const safeMetrics = safeViewportCard.getInteractionMetrics(largeViewCanvas, 'top');
+console.assert(safeReference.sx === 2.4 && safeReference.sy === 1.8,
+    'Viewport reference must expand with the current box');
+console.assert(safeMetrics.boxLeft >= 14 && safeMetrics.boxRight <= largeViewCanvas.clientWidth - 14,
+    'Grown box must retain horizontal pointer gutter');
+console.assert(safeMetrics.boxTop >= 14 && safeMetrics.boxBottom <= largeViewCanvas.clientHeight - 14,
+    'Grown box must retain vertical pointer gutter');
+
+// Wheel zoom is continuous, directionally correct, and safely bounded.
+const zoomInTarget = FrameCard.wheelZoomTarget(1, -120);
+const zoomOutTarget = FrameCard.wheelZoomTarget(1, 120);
+console.assert(zoomInTarget > 1 && zoomOutTarget < 1,
+    'Wheel direction must zoom in/out continuously');
+console.assert(FrameCard.wheelZoomTarget(2.75, -10000) === 2.75,
+    'Wheel zoom must respect maximum bound');
+console.assert(FrameCard.wheelZoomTarget(0.45, 10000) === 0.45,
+    'Wheel zoom must respect minimum bound');
+console.log('✓ FrameCard safe corner gutter and bounded smooth wheel zoom passed');
 
 // Test 21: Screen-space opposite corner anchor invariance & Edge resize prohibition
 const testMetrics = OrthoCanvasRenderer.getMetrics(mockCanvas, { sx: 2.0, sy: 4.0, sz: 1.5 }, 'top');
@@ -756,6 +932,140 @@ card0.data.box.sy = 5.0;
 console.assert(card0.redoStack.length === 0, 'New mutation should clear redo stack');
 
 console.log('✓ Localized FrameCard Undo / Redo history stack passed');
+
+// Test 23: A completed resize must not replay stale interaction/cache state.
+const renderInteractionCard = Object.create(FrameCard.prototype);
+renderInteractionCard.data = {
+    box: { x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, sx: 3.1, sy: 1.1, sz: 2.3 },
+    label: { color: '#30D158' },
+    outside: false,
+};
+renderInteractionCard.originalBox = { ...renderInteractionCard.data.box };
+renderInteractionCard.dragState = { initialLocalPoints: new Float32Array([0, 0, 0, 1]) };
+renderInteractionCard.dom = { classList: { add() {}, remove() {} } };
+renderInteractionCard.currentBadge = { style: {} };
+renderInteractionCard.grid = { className: '' };
+renderInteractionCard.canvases = Object.fromEntries(
+    ['top', 'side', 'front'].map((view) => [view, { parentElement: { style: {} } }]),
+);
+
+const originalOrthoRender = OrthoCanvasRenderer.render;
+const interactionRenders = [];
+try {
+    OrthoCanvasRenderer.render = (_canvas, _points, _box, viewType, options) => {
+        interactionRenders.push({ viewType, interaction: options.interaction });
+    };
+
+    renderInteractionCard.renderViews(null, true, {
+        viewMode: 'all',
+        zoom: 0.4,
+        pointSize: 1,
+        interaction: { activeAction: 'resize-corner', viewType: 'side' },
+    });
+    console.assert(
+        !Object.hasOwn(renderInteractionCard.lastRenderOptions, 'interaction'),
+        'Transient resize interaction must not persist in lastRenderOptions',
+    );
+
+    renderInteractionCard.dragState = null;
+    interactionRenders.length = 0;
+    renderInteractionCard.renderViews(null, true, renderInteractionCard.lastRenderOptions);
+    console.assert(
+        interactionRenders.length === 3 && interactionRenders.every((entry) => !entry.interaction?.activeAction),
+        'First render after pointerup must refresh all views without stale resize state',
+    );
+} finally {
+    OrthoCanvasRenderer.render = originalOrthoRender;
+}
+console.log('✓ FrameCard pointerup clears transient resize interaction passed');
+
+// Hotkey preferences: selected categories start unassigned and any shortcut can be cleared.
+const hotkeyPreferences = window.CVATQAQC.HotkeyPreferences;
+hotkeyPreferences.reset();
+const unassignedCategories = new Set(['Đổi một mặt', 'Kích thước mẫu']);
+const unassignedDefinitions = hotkeyPreferences.definitions.filter((definition) => unassignedCategories.has(definition.category));
+console.assert(unassignedDefinitions.length === 10,
+    'Expected all one-face resize and size-preset actions in the unassigned group');
+console.assert(unassignedDefinitions.every((definition) => hotkeyPreferences.combo(definition.id) === ''),
+    'One-face resize and size-preset shortcuts must be empty by default');
+console.assert(hotkeyPreferences.setCombo('preset_sedan', 'Digit9').ok,
+    'An empty preset shortcut must accept a new key');
+console.assert(hotkeyPreferences.combo('preset_sedan') === 'Digit9',
+    'Recorded preset shortcut must be saved');
+console.assert(hotkeyPreferences.clearCombo('preset_sedan').ok && hotkeyPreferences.combo('preset_sedan') === '',
+    'Clearing a shortcut must persist an explicit unassigned value');
+hotkeyPreferences.reset();
+console.log('✓ Empty hotkey defaults and per-action clearing passed');
+
+// Ground-fit engine: deterministic planar road, alignment and PCD parsing.
+const roadPoints = [];
+for (let x = -4.8; x <= 4.8; x += 0.2) {
+    for (let y = -4.8; y <= 4.8; y += 0.2) {
+        roadPoints.push(x, y, 0.04 * x - 0.02 * y + 0.15);
+    }
+}
+const originalGroundBox = [0, 0, 1.0, 0, 0, 0, 4.2, 2.0, 1.6];
+const groundEstimate = GroundFit.engine.estimate(new Float32Array(roadPoints), originalGroundBox);
+const alignedGroundBox = GroundFit.engine.align(originalGroundBox, groundEstimate);
+console.assert(Math.abs(alignedGroundBox.points[0]) < 1e-9 && Math.abs(alignedGroundBox.points[1]) < 1e-9,
+    'Ground fit must preserve X/Y center');
+console.assert(alignedGroundBox.points.slice(6, 9).every((value, index) => value === originalGroundBox[index + 6]),
+    'Ground fit must preserve box dimensions');
+console.assert(Math.abs(alignedGroundBox.points[2] - 0.951) < 0.015,
+    `Ground-fit center height should follow plane and half box height, got ${alignedGroundBox.points[2]}`);
+console.assert(Math.abs(alignedGroundBox.longitudinalDegrees - 2.29) < 0.2,
+    'Ground-fit longitudinal slope should match synthetic road');
+console.assert(Math.abs(alignedGroundBox.lateralDegrees - 1.15) < 0.2,
+    'Ground-fit lateral slope should match synthetic road');
+
+// Inspector ground fitting must use the cached PCD for the card frame and update
+// the card directly without requiring a selected cuboid on CVAT's main canvas.
+const inspectorGroundCard = {
+    frame: 12,
+    data: {
+        box: TrackReader.parsePointsToBox(originalGroundBox),
+        points: [...originalGroundBox],
+        keyframe: true,
+    },
+    dragState: null,
+    lastPointCloudData: null,
+    takeSnapshot() { return { box: { ...this.data.box }, points: [...this.data.points], outside: false, keyframe: true }; },
+    pushUndoSnapshot(snapshot) { this.undoSnapshot = snapshot; },
+    updateData(data) { this.data = data; },
+};
+const inspectorGroundDock = Object.create(MacOSDock.prototype);
+inspectorGroundDock.cards = new Map([[12, inspectorGroundCard]]);
+inspectorGroundDock.state = { activeClientID: 101, currentFrame: 12 };
+inspectorGroundDock.hoveredFrame = 12;
+inspectorGroundDock.hotkeyFrame = null;
+inspectorGroundDock.pcdCache = { get: (frame) => frame === 12 ? { positions: new Float32Array(roadPoints), stride: 3 } : null };
+let inspectorGroundSaved = null;
+inspectorGroundDock.callbacks = {
+    getJob: () => 'fixture-job',
+    onReadCuboid: async () => ({ points: [...originalGroundBox] }),
+    onUpdateCuboid: async (frame, id, points) => {
+        inspectorGroundSaved = { frame, id, points: [...points] };
+        return true;
+    },
+};
+const inspectorGroundResult = await inspectorGroundDock.fitGroundForCard();
+console.assert(inspectorGroundSaved?.frame === 12 && inspectorGroundSaved?.id === 101,
+    'Inspector ground fit must update the active card frame and object');
+console.assert(Math.abs(inspectorGroundSaved.points[2] - alignedGroundBox.points[2]) < 1e-9,
+    'Inspector ground fit must apply the computed ground height');
+console.assert(inspectorGroundCard.undoSnapshot?.points[2] === originalGroundBox[2],
+    'Inspector ground fit must preserve localized undo history');
+console.assert(Number.isFinite(inspectorGroundResult.rms) && inspectorGroundCard.data.keyframe === true,
+    'Inspector ground fit must complete and keep the card as a keyframe');
+console.log('✓ Inspector card ground fitting works without CVAT canvas selection');
+
+const asciiPCD = new TextEncoder().encode(
+    '# .PCD v0.7\nFIELDS x y z\nSIZE 4 4 4\nTYPE F F F\nCOUNT 1 1 1\nWIDTH 2\nHEIGHT 1\nPOINTS 2\nDATA ascii\n1 2 3\n4 5 6\n',
+).buffer;
+const parsedPCD = GroundFit.engine.parsePCD(asciiPCD);
+console.assert(parsedPCD.count === 2 && parsedPCD.positions.length === 6 && parsedPCD.positions[5] === 6,
+    'Ground-fit ASCII PCD parser should preserve XYZ points');
+console.log('✓ Ground fitting, slope alignment and in-memory PCD parsing passed');
 
 console.log('All Unit Tests Passed Successfully!');
 })().catch((error) => {

@@ -22,11 +22,25 @@ class CVATHook {
             frameChange: [],
             canvasReady: [],
             objectUpdated: [],
+            objectOutsideChanged: [],
             historyChange: [],
             filterChange: []
         };
         this.isHooked = false;
         this._undoRedoLock = false;
+    }
+
+    static sameCuboidPoints(left, right) {
+        return Array.isArray(left) && Array.isArray(right) && left.length >= 9 && right.length >= 9 &&
+            left.slice(0, 9).every((value, index) => Math.abs(value - right[index]) <= 1e-7);
+    }
+
+    findEditableCanvas() {
+        if (typeof document === 'undefined') return null;
+        return [...document.querySelectorAll('canvas')].find((canvas) =>
+            typeof canvas.getDrawnObjects === 'function' &&
+            typeof canvas.updatePosition === 'function'
+        ) || null;
     }
 
     /**
@@ -194,6 +208,26 @@ class CVATHook {
         let prevCanvas = null;
         let prevUndoLength = 0;
         let prevRedoLength = 0;
+        const outsideByObjectFrame = new Map();
+
+        const publishOutsideChanges = (annotationStates, frame, emitChanges = true) => {
+            if (!Array.isArray(annotationStates)) return;
+            for (const annotationState of annotationStates) {
+                if (typeof annotationState?.clientID !== 'number') continue;
+                const stateFrame = annotationState.frame ?? frame;
+                const key = `${annotationState.clientID}:${stateFrame}`;
+                const outside = !!annotationState.outside;
+                if (emitChanges && outsideByObjectFrame.has(key) && outsideByObjectFrame.get(key) !== outside) {
+                    this.emit('objectOutsideChanged', {
+                        clientID: annotationState.clientID,
+                        frame: stateFrame,
+                        outside,
+                        source: 'cvat'
+                    });
+                }
+                outsideByObjectFrame.set(key, outside);
+            }
+        };
 
         this.store.subscribe(() => {
             try {
@@ -204,6 +238,7 @@ class CVATHook {
                 const canvas = state.annotation.canvas?.instance || null;
                 const clientID = this.findActiveClientID(state);
                 const frame = state.annotation.player?.frame?.number ?? 0;
+                publishOutsideChanges(state.annotation.annotations?.states, frame);
 
                 this.jobInstance = job;
                 this.canvasInstance = canvas;
@@ -247,6 +282,7 @@ class CVATHook {
             this.canvasInstance = initialState.annotation.canvas?.instance;
             this.activeClientID = this.findActiveClientID(initialState);
             this.currentFrame = initialState.annotation.player?.frame?.number ?? 0;
+            publishOutsideChanges(initialState.annotation.annotations?.states, this.currentFrame, false);
             if (this.activeClientID !== null) {
                 this.emit('objectChange', {
                     clientID: this.activeClientID,
@@ -350,16 +386,43 @@ class CVATHook {
                 return false;
             }
 
-            // 2. Update points in-place and mark keyframe
-            targetState.points = [...newPoints];
-            targetState.keyframe = true;
+            // The visible frame must travel through CVAT's native updatePosition path.
+            // state.save() alone updates annotation RAM/history but can leave the Three.js
+            // cuboid mesh stale until the user changes frame.
+            const editableCanvas = frameNumber === this.currentFrame ? this.findEditableCanvas() : null;
+            const drawnObject = editableCanvas?.getDrawnObjects?.().find(({ state }) =>
+                state?.clientID === clientID && (state.frame ?? frameNumber) === frameNumber
+            );
+            let updatedThroughCanvas = false;
 
-            // 3. Save to CVAT client-side AnnotationsCollection (0 HTTP requests)
-            await targetState.save();
-            console.log(`[CVAT-QAQC] In-memory cuboid updated for Object #${clientID} at frame #${frameNumber}`);
+            if (editableCanvas && drawnObject?.state) {
+                editableCanvas.updatePosition(drawnObject.state, [...newPoints]);
+                const deadline = Date.now() + 2000;
+                while (Date.now() <= deadline) {
+                    const current = editableCanvas.getDrawnObjects().find(({ state }) =>
+                        state?.clientID === clientID && (state.frame ?? frameNumber) === frameNumber
+                    );
+                    if (CVATHook.sameCuboidPoints(current?.state?.points, newPoints) &&
+                        CVATHook.sameCuboidPoints(current?.data?.points, newPoints)) {
+                        updatedThroughCanvas = true;
+                        break;
+                    }
+                    await new Promise((resolve) => setTimeout(resolve, 16));
+                }
+                if (!updatedThroughCanvas) {
+                    throw new Error('Canvas3D chưa xác nhận hình học mới; không báo thành công giả.');
+                }
+                console.log(`[CVAT-QAQC] Realtime Canvas3D cuboid updated for Object #${clientID} at frame #${frameNumber}`);
+            } else {
+                // Off-screen frames have no live mesh. Persist their annotation state in RAM.
+                targetState.points = [...newPoints];
+                targetState.keyframe = true;
+                await targetState.save();
+                console.log(`[CVAT-QAQC] In-memory cuboid updated for Object #${clientID} at frame #${frameNumber}`);
+            }
 
-            // 4. If this is the active frame in CVAT's main viewport, trigger lightweight Three.js update (0 disk I/O, < 5ms)
-            if (frameNumber === this.currentFrame && this.canvasInstance) {
+            // Fallback renderer notification for CVAT versions without an editable DOM canvas.
+            if (!updatedThroughCanvas && frameNumber === this.currentFrame && this.canvasInstance) {
                 const canvasDOM = typeof this.canvasInstance.html === 'function' ? this.canvasInstance.html() : null;
                 const perspective = canvasDOM?.perspective;
                 if (perspective) {
@@ -379,7 +442,7 @@ class CVATHook {
                 }
             }
 
-            // 5. Defer Redux history sync to the next animation frame tick (zero blocking on user interaction, INP < 16ms)
+            // Keep Redux history/state synchronized after either update path.
             if (this.store && this.jobInstance?.actions) {
                 setTimeout(async () => {
                     try {

@@ -427,6 +427,8 @@ class OrthoCanvasRenderer {
         } else if (activeResizeAction) {
             const dimText = `${(box.sx || sx).toFixed(2)} × ${(box.sy || sy).toFixed(2)} × ${(box.sz || sz).toFixed(2)}m`;
             this.drawBadge(ctx, centerX, boxTop, dimText, '#FF3B30');
+        } else if (interaction.zoomViewType === viewType && Number.isFinite(interaction.zoomPercent)) {
+            this.drawBadge(ctx, width - 42, 34, `${interaction.zoomPercent}%`, '#0A84FF');
         }
 
         // 8. Dimension Caption (Bottom Left)

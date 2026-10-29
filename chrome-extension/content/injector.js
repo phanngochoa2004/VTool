@@ -34,6 +34,9 @@ const {
 
     let currentTrackFrames = [];
     let currentClientID = null;
+    let bulkTrackMutationDepth = 0;
+    let editEpoch = 0;
+    let historyRefreshEpoch = 0;
 
     const dock = new MacOSDock({
         onBeforeOpen: async () => {
@@ -139,23 +142,35 @@ const {
             return states.find((state) => state.clientID === clientID);
         },
         onUpdateCuboid: async (frame, clientID, newPoints, newBox) => {
-            // Persist to CVAT in-memory AnnotationsCollection and sync Redux for this specific frame only
-            const saved = await hook.updateObjectCuboid(frame, clientID, newPoints);
-            if (!saved) return false;
+            const operation = ++editEpoch;
+            historyRefreshEpoch++;
+            const previousTrackData = TrackReader.currentTrackData?.clientID === clientID ? {
+                ...TrackReader.currentTrackData,
+                shapes: TrackReader.currentTrackData.shapes.map((shape) => ({
+                    ...shape,
+                    points: [...shape.points],
+                })),
+            } : null;
+            const previousFrames = currentTrackFrames;
 
-            // Keep internal track keyframe cache updated without overwriting sibling cards in the filmstrip
-            if (TrackReader.currentTrackData && TrackReader.currentTrackData.clientID === clientID) {
-                const shapes = TrackReader.currentTrackData.shapes;
-                const existing = shapes?.find(s => s.frame === frame);
-                if (existing) {
-                    existing.points = [...newPoints];
-                } else if (shapes) {
-                    shapes.push({ frame, points: [...newPoints], outside: false, rotation: 0 });
-                    shapes.sort((a, b) => a.frame - b.frame);
-                }
+            // Optimistic source-of-truth update: promote this frame to a keyframe,
+            // re-interpolate immediately, and keep every card on the same revision.
+            const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, newPoints);
+            if (updatedFrames?.length) {
+                currentTrackFrames = updatedFrames;
+                dock.refreshTrackData(updatedFrames);
             }
 
-            return true;
+            const saved = await hook.updateObjectCuboid(frame, clientID, newPoints);
+            if (saved) return true;
+
+            // Roll back only if no newer edit has superseded this operation.
+            if (operation === editEpoch) {
+                if (previousTrackData) TrackReader.currentTrackData = previousTrackData;
+                currentTrackFrames = previousFrames;
+                dock.refreshTrackData(previousFrames);
+            }
+            return false;
         },
         onUpdateOutside: async (frame, clientID, outside) => {
             // Keep internal track keyframe cache updated for this specific frame only
@@ -171,20 +186,32 @@ const {
             await hook.updateObjectOutside(frame, clientID, outside);
         },
         onApplySizeToTrack: async (clientID, sizeObj) => {
-            // 1. Instant re-interpolation across dock filmstrip in < 1ms
-            const updatedFrames = TrackReader.applySizeToTrack(clientID, sizeObj);
-            if (updatedFrames && updatedFrames.length > 0) {
-                currentTrackFrames = updatedFrames;
-                if (typeof dock.refreshTrackData === 'function') {
+            bulkTrackMutationDepth++;
+            historyRefreshEpoch++;
+            try {
+                // 1. Instant re-interpolation across dock filmstrip in < 1ms
+                const updatedFrames = TrackReader.applySizeToTrack(clientID, sizeObj);
+                if (updatedFrames?.length) {
+                    currentTrackFrames = updatedFrames;
                     dock.refreshTrackData(updatedFrames);
-                } else if (typeof dock.updateFramesData === 'function') {
-                    dock.updateFramesData(updatedFrames);
                 }
-            }
 
-            // 2. Persist to CVAT in-memory AnnotationsCollection and sync Canvas3D/Redux in realtime
-            const kfNumbers = (TrackReader.currentTrackData?.shapes || []).map(s => s.frame);
-            await hook.applySizeToTrack(clientID, sizeObj, kfNumbers);
+                // 2. Persist all keyframes while history refresh is suspended, so a
+                // partially-saved track cannot overwrite the optimistic UI revision.
+                const kfNumbers = (TrackReader.currentTrackData?.shapes || []).map(s => s.frame);
+                const saved = await hook.applySizeToTrack(clientID, sizeObj, kfNumbers);
+                if (!saved) throw new Error('CVAT chưa lưu được kích thước đồng bộ.');
+
+                // 3. Confirm once after the entire batch, then publish one coherent revision.
+                const confirmedFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
+                if (confirmedFrames.length) {
+                    currentTrackFrames = confirmedFrames;
+                    dock.refreshTrackData(confirmedFrames);
+                }
+                return true;
+            } finally {
+                bulkTrackMutationDepth--;
+            }
         }
     });
 
@@ -246,13 +273,38 @@ const {
         }
     });
 
+    // CVAT -> Inspector synchronization. This path is independent of Undo/Redo
+    // history because native Outside actions may update Redux without changing
+    // the history lengths observed by the extension.
+    hook.on('objectOutsideChanged', ({ clientID, frame, outside }) => {
+        if (clientID !== currentClientID || clientID !== dock.state.activeClientID) return;
+
+        const updatedFrames = TrackReader.updateTrackKeyframe(clientID, frame, null, outside);
+        if (updatedFrames?.length) {
+            currentTrackFrames = updatedFrames;
+            dock.refreshTrackData(updatedFrames);
+            return;
+        }
+
+        // Standalone shapes do not populate TrackReader.currentTrackData.
+        const currentFrameData = currentTrackFrames.find((item) => item.frame === frame);
+        if (currentFrameData) {
+            currentFrameData.outside = !!outside;
+            dock.refreshTrackData(currentTrackFrames);
+        }
+    });
+
     // Listen for CVAT undo/redo or annotation history changes
     hook.on('historyChange', async ({ clientID, frame }) => {
+        if (bulkTrackMutationDepth > 0) return;
+        const refreshOperation = ++historyRefreshEpoch;
         const targetID = clientID || currentClientID;
         if (targetID !== null && hook.jobInstance) {
             try {
-                currentTrackFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
-                dock.refreshTrackData(currentTrackFrames);
+                const refreshedFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
+                if (refreshOperation !== historyRefreshEpoch || bulkTrackMutationDepth > 0) return;
+                currentTrackFrames = refreshedFrames;
+                dock.refreshTrackData(refreshedFrames);
             } catch (err) {
                 console.warn('[CVAT-QAQC] Error refreshing track after history change:', err);
             }

@@ -25,6 +25,7 @@ th, td { border: 1px solid #adb9ca; padding: 7px 12px; text-align: left; }
 <script src="../../src/core/size_clipboard.js"></script>
 <script src="../../src/core/hotkey_preferences.js"></script>
 <script src="../../src/core/workspace_layout.js"></script>
+<script src="../../src/core/ground_fit.js"></script>
 <script src="../../src/core/hotkeys.js"></script>
 <script src="../../src/core/hotkeys_autostart.js"></script>
 <script src="../../src/ui/frame_card.js"></script>
@@ -93,6 +94,16 @@ dock = new MacOSDock({ getJob: () => job, getStore: () => store,
 });
 dock.updateTrack(7, await TrackReader.getTrackFrames(7, job), 0, { get: () => null });
 await dock.open();
+console.assert(dock.helpDialog.querySelectorAll('[role="tablist"], [role="tab"]').length === 0,
+    'Cấu hình phím không được chứa giao diện tab dư thừa');
+console.assert(!dock.helpDialog.textContent.includes('Hướng dẫn'),
+    'Cấu hình phím không được chứa nội dung Hướng dẫn');
+console.assert(dock.helpDialog.querySelector('.cvat-qaqc-hotkey-settings')?.hidden === false,
+    'Danh sách ghi phím phải hiển thị trực tiếp');
+console.assert(dock.helpDialog.querySelectorAll('.cvat-qaqc-hotkey-clear').length === window.CVATQAQC.HotkeyPreferences.definitions.length,
+    'Mỗi chức năng phải có nút xóa phím');
+console.assert([...dock.helpDialog.querySelectorAll('.cvat-qaqc-hotkey-clear:disabled')].length >= 10,
+    'Các phím mặc định để trống phải có nút xóa bị vô hiệu hóa');
 start3DHotkeysAutostart({ getInspectorTarget: (event) => dock.getHotkeyTarget(event) });
 show();
 </script>

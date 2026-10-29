@@ -405,6 +405,23 @@
   box-shadow: 0 0 0 3px var(--macos-accent-glow);
 }
 
+.cvat-qaqc-btn:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.cvat-qaqc-ground-fit-btn {
+  color: #30D158;
+  border-color: rgba(48, 209, 88, 0.32);
+  background: rgba(48, 209, 88, 0.1);
+}
+
+.cvat-qaqc-ground-fit-btn:hover:not(:disabled) {
+  color: #fff;
+  border-color: rgba(48, 209, 88, 0.68);
+  background: rgba(48, 209, 88, 0.22);
+}
+
 .cvat-qaqc-help-btn {
   width: 24px;
   padding: 0;
@@ -456,7 +473,7 @@
   box-shadow: 0 0 0 3px var(--macos-accent-glow);
 }
 
-/* In-app usage guide and keyboard shortcut reference */
+/* In-app keyboard shortcut configuration */
 .cvat-qaqc-help-overlay {
   --help-surface: rgba(30, 30, 32, 0.82);
   --help-section: rgba(255, 255, 255, 0.045);
@@ -666,16 +683,8 @@
   line-height: 1.45;
 }
 
-.cvat-qaqc-help-tabs {
-  display: flex;
-  gap: 2px;
-  padding: 7px 18px;
-  border-bottom: 1px solid var(--help-separator);
-  background: rgba(0, 0, 0, 0.08);
-}
-
-.cvat-qaqc-help-tab,
 .cvat-qaqc-hotkey-record,
+.cvat-qaqc-hotkey-clear,
 .cvat-qaqc-hotkey-reset {
   min-height: 26px;
   padding: 3px 10px;
@@ -687,17 +696,30 @@
   cursor: pointer;
 }
 
-.cvat-qaqc-help-tab.active {
-  color: #fff;
-  border-color: rgba(10, 132, 255, 0.8);
-  background: #0a84ff;
-}
-
-.cvat-qaqc-help-tab:focus-visible,
 .cvat-qaqc-hotkey-record:focus-visible,
+.cvat-qaqc-hotkey-clear:focus-visible,
 .cvat-qaqc-hotkey-reset:focus-visible {
   outline: 3px solid rgba(10, 132, 255, 0.45);
   outline-offset: 1px;
+}
+
+.cvat-qaqc-hotkey-record:hover:not(:disabled),
+.cvat-qaqc-hotkey-clear:hover:not(:disabled),
+.cvat-qaqc-hotkey-reset:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.cvat-qaqc-hotkey-record:active:not(:disabled),
+.cvat-qaqc-hotkey-clear:active:not(:disabled),
+.cvat-qaqc-hotkey-reset:active:not(:disabled) {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.cvat-qaqc-hotkey-record:disabled,
+.cvat-qaqc-hotkey-clear:disabled,
+.cvat-qaqc-hotkey-reset:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .cvat-qaqc-hotkey-settings {
@@ -715,7 +737,7 @@
 
 .cvat-qaqc-hotkey-row {
   display: grid;
-  grid-template-columns: minmax(170px, 1fr) 110px 76px;
+  grid-template-columns: minmax(170px, 1fr) 110px 76px 76px;
   align-items: center;
   gap: 10px;
   min-height: 30px;
@@ -724,6 +746,29 @@
 .cvat-qaqc-hotkey-label {
   color: var(--help-secondary);
   font-size: 12px;
+}
+
+.cvat-qaqc-ground-auto-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 30px;
+  color: var(--help-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cvat-qaqc-ground-auto-toggle {
+  width: 34px;
+  height: 20px;
+  accent-color: #0a84ff;
+  cursor: pointer;
+}
+
+.cvat-qaqc-ground-auto-toggle:focus-visible {
+  outline: 3px solid rgba(10, 132, 255, 0.45);
+  outline-offset: 2px;
 }
 
 .cvat-qaqc-hotkey-value {
@@ -1194,7 +1239,7 @@ body.cvat-qaqc-split-layout-active .cvat-objects-sidebar.ant-layout-sider-collap
 }
 
 .cvat-qaqc-filmstrip.size-large .cvat-qaqc-views-grid {
-  height: 220px;
+  height: 260px;
 }
 
 /* Single view mode (when user filters by Top / Side / Front) */

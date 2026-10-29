@@ -62,7 +62,7 @@ Công cụ kiểm định chất lượng (QA/QC) gán nhãn 3D Point Cloud chuy
 
 Bấm nút `?` → **Cấu hình phím** để đổi phím tắt. Mỗi lệnh nhận một phím hoặc một phím bổ trợ + một phím chính; cấu hình tự lưu trong `localStorage` của trình duyệt.
 
-Bộ phím từ `CVAT-3D-Hotkeys-1.6.0` tự chạy cùng Inspector trên các địa chỉ trong `src/config/allowed_sites.js`, kể cả khi mở job 3D sau khi trang đã tải. Chọn đúng một cuboid trước khi chỉnh; phím không can thiệp khi nhập liệu hoặc mở hộp thoại. Dữ liệu point cloud được tính bằng mét.
+Bộ phím tích hợp tự chạy cùng Inspector trên các địa chỉ trong `src/config/allowed_sites.js`, kể cả khi mở job 3D sau khi trang đã tải. Chọn đúng một cuboid trước khi chỉnh; phím không can thiệp khi nhập liệu hoặc mở hộp thoại. Dữ liệu point cloud được tính bằng mét.
 
 Trong panel Inspector: đặt con trỏ lên thẻ frame cần sửa ở các ô Top/Side/Front, hoặc bấm trực tiếp vào thẻ/canvas rồi nhấn phím. Phím chỉnh đúng frame của thẻ đó (kể cả frame khác khung CVAT chính), cập nhật cả ba góc nhìn và lưu qua cơ chế chỉnh sửa sẵn có của repo. **Không cần chọn lại box trên CVAT chính.** G/Shift+G đồng bộ/khôi phục kích thước theo box trên thẻ đang chọn; P/Shift+P thao tác Outside của track trong panel. Alt+T vẫn chỉnh bố cục CVAT chính. Bộ tự bật thay thế handler cũ nếu handler đó chưa kết nối với Inspector.
 
@@ -78,6 +78,7 @@ W và E đã hoán đổi chức năng: **Q/W** xoay trái/phải 2° quanh tr�
 | Shift + ↑ / ↓ | Nới mặt trên ra / thu mặt dưới vào 6 cm, giữ nguyên mặt đối diện |
 | Shift + Numpad 1 / 2 | Nới mặt phải ra / thu mặt trái vào 6 cm, giữ nguyên mặt đối diện |
 | Numpad 4 / 5 | Nghiêng ngang phải / trái 3° quanh trục X cục bộ |
+| Shift + R | Căn cao độ, Roll và Pitch của box đang chọn theo mặt đường |
 | Z | Xoay trái 90° quanh trục Z của point cloud |
 | X | Xoay 90° quanh Z cục bộ và đổi Dài/Rộng, giữ nguyên vùng box |
 | 1 / 2 / 3 / 4 (hàng trên) | Mẫu Sedan / SUV / xe máy / người đi bộ |
@@ -92,6 +93,14 @@ Ví dụ Shift+←: chỉ mặt phía trái nở ra 6 cm; mặt phía phải đ�
 Kích thước mẫu Dài × Rộng × Cao: Sedan `4.5 × 1.85 × 1.5`, SUV `4.7 × 1.95 × 1.65`, xe máy `1.85 × 0.8 × 1.5`, người đi bộ `0.6 × 0.6 × 1.7`.
 
 Thay đổi đi qua cơ chế chỉnh sửa và lịch sử của CVAT; dùng Undo của CVAT hoặc Ctrl+Z để hoàn tác. G/P chỉ áp dụng Track; bản khôi phục Shift+G/P chỉ tồn tại trong phiên trang. Bấm **Save** trong CVAT để lưu lên server.
+
+### Căn box theo mặt đường
+
+Chọn đúng một cuboid trên canvas CVAT của frame hiện tại, rồi nhấn **Shift+R** hoặc nút **⛰ Căn nền** trên toolbar. Công cụ giữ nguyên X/Y, kích thước, hướng đầu xe, ID và trạng thái annotation; chỉ tính lại Z, Roll và Pitch theo mặt đường. Kết quả đi qua `canvas.updatePosition`, vì vậy Undo/Redo chuẩn của CVAT vẫn hoạt động.
+
+Thuật toán chỉ đọc PCD của frame hiện tại đã được CVAT tải vào RAM. Nó không gọi `fetch`, API frame hoặc request mạng bổ sung. Mặt nền được ước lượng theo các ô không gian quanh đáy box, loại điểm thân xe/vật cản, kiểm tra độ phủ đáy, độ liên tục, sai số và giới hạn độ nghiêng. Nếu dữ liệu mơ hồ, thiếu điểm hoặc độ dịch cao quá giới hạn an toàn, box được giữ nguyên và lỗi xuất hiện ở nút/Console.
+
+Trong **? → Cấu hình phím**, có thể đổi phím `Căn box theo mặt đường` và bật **Tự căn khi chọn box trên canvas CVAT**. Tự căn chỉ được lưu trong tab/phiên hiện tại để tránh thay đổi ngoài ý muốn ở phiên sau. Chức năng này không căn card của frame khác trong Inspector vì các frame đó không phải PCD đang tải trên canvas CVAT chính.
 
 Sau khi cập nhật: Reload tiện ích trong `chrome://extensions`, rồi tải lại tab CVAT. Tắt tiện ích hotkey cũ nếu còn bật riêng để tránh hai bộ phím chạy cùng lúc.
 

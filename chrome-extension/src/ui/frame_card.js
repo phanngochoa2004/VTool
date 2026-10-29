@@ -8,6 +8,10 @@
     'use strict';
 
 const { Math3D, OrthoCanvasRenderer, TrackReader, SizeClipboard } = global.CVATQAQC;
+const VIEW_MARGIN_FACTOR = 1.10;
+const MIN_VIEW_ZOOM = 0.45;
+const MAX_VIEW_ZOOM = 2.75;
+const WHEEL_ZOOM_SPEED = 0.0015;
 
 class FrameCard {
     /**
@@ -49,6 +53,11 @@ class FrameCard {
         this.dragState = null;
         this.hoverState = null;
         this.rafPending = false;
+        this.viewZoom = { top: 1, side: 1, front: 1 };
+        this.viewZoomTarget = { top: 1, side: 1, front: 1 };
+        this.zoomAnimationFrame = null;
+        this.zoomAnimationActive = false;
+        this.zoomingViewType = null;
 
         // Per-frame localized Undo / Redo history stack
         this.undoStack = [];
@@ -288,6 +297,7 @@ class FrameCard {
             canvas.setAttribute('aria-label', `${viewType} — Frame ${this.frame}. Phím tắt chỉnh box đang trỏ hoặc focus.`);
             canvas.width = 220;
             canvas.height = 110;
+            canvas.title = 'Lăn chuột để zoom view này. Nhấp đúp để về 100%.';
             this.canvases[viewType] = canvas;
 
             this.setupCanvasInteractions(canvas, viewType);
@@ -717,6 +727,90 @@ class FrameCard {
     }
 
     /**
+     * Use the exact same projection options for pointer hit-testing as for drawing.
+     * A different margin or reference box moves the computed corner handles away
+     * from the red handles that the annotator can actually see.
+     */
+    getInteractionMetrics(canvas, viewType) {
+        return OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, {
+            ...(this.lastRenderOptions || {}),
+            zoom: (this.lastRenderOptions?.zoom || 1) * this.getViewZoom(viewType),
+            marginFactor: VIEW_MARGIN_FACTOR,
+            referenceBox: this.getViewportReferenceBox()
+        });
+    }
+
+    /** Keep the current box inside the viewport even after its dimensions grow. */
+    getViewportReferenceBox() {
+        const current = this.data.box || {};
+        const original = this.originalBox || {};
+        return {
+            ...current,
+            sx: Math.max(current.sx || 0, original.sx || 0, 0.2),
+            sy: Math.max(current.sy || 0, original.sy || 0, 0.2),
+            sz: Math.max(current.sz || 0, original.sz || 0, 0.2)
+        };
+    }
+
+    getViewZoom(viewType) {
+        const zoom = this.viewZoom?.[viewType];
+        return Number.isFinite(zoom) ? zoom : 1;
+    }
+
+    static wheelZoomTarget(currentZoom, deltaPixels) {
+        const current = Number.isFinite(currentZoom) ? currentZoom : 1;
+        const delta = Number.isFinite(deltaPixels) ? deltaPixels : 0;
+        return Math.min(MAX_VIEW_ZOOM, Math.max(
+            MIN_VIEW_ZOOM,
+            current * Math.exp(-delta * WHEEL_ZOOM_SPEED)
+        ));
+    }
+
+    setViewZoomTarget(viewType, targetZoom) {
+        if (!Object.hasOwn(this.viewZoomTarget, viewType)) return;
+        this.viewZoomTarget[viewType] = Math.min(
+            MAX_VIEW_ZOOM,
+            Math.max(MIN_VIEW_ZOOM, targetZoom)
+        );
+        this.zoomingViewType = viewType;
+        this.startSmoothZoom();
+    }
+
+    startSmoothZoom() {
+        if (this.zoomAnimationFrame !== null) return;
+        this.zoomAnimationActive = true;
+
+        const step = () => {
+            let needsAnotherFrame = false;
+            for (const viewType of ['top', 'side', 'front']) {
+                const current = this.getViewZoom(viewType);
+                const target = this.viewZoomTarget[viewType];
+                const difference = target - current;
+                if (Math.abs(difference) <= 0.002) {
+                    this.viewZoom[viewType] = target;
+                } else {
+                    this.viewZoom[viewType] = current + difference * 0.28;
+                    needsAnotherFrame = true;
+                }
+            }
+
+            this.requestRender();
+            if (needsAnotherFrame) {
+                this.zoomAnimationFrame = requestAnimationFrame(step);
+                return;
+            }
+
+            this.zoomAnimationFrame = null;
+            this.zoomAnimationActive = false;
+            this.zoomingViewType = null;
+            // One final render refreshes the point crop after the lightweight animation.
+            this.requestRender();
+        };
+
+        this.zoomAnimationFrame = requestAnimationFrame(step);
+    }
+
+    /**
      * Set up smooth direct manipulation (rotate like CVAT, translate, 4-corner resize) on canvas
      * @param {HTMLCanvasElement} canvas
      * @param {'top'|'side'|'front'} viewType
@@ -769,6 +863,26 @@ class FrameCard {
             return null;
         };
 
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            const pageHeight = canvas.clientHeight || 120;
+            const deltaPixels = e.deltaMode === 1
+                ? e.deltaY * 16
+                : (e.deltaMode === 2 ? e.deltaY * pageHeight : e.deltaY);
+            const nextTarget = FrameCard.wheelZoomTarget(
+                this.viewZoomTarget[viewType],
+                deltaPixels
+            );
+            this.setViewZoomTarget(viewType, nextTarget);
+        }, { passive: false });
+
+        canvas.addEventListener('dblclick', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.setViewZoomTarget(viewType, 1);
+        });
+
         canvas.addEventListener('pointerenter', () => {
             this.hoverState = { viewType, target: null };
         });
@@ -783,7 +897,7 @@ class FrameCard {
 
         canvas.addEventListener('pointermove', (e) => {
             const pos = getCanvasPos(e);
-            const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);
+            const metrics = this.getInteractionMetrics(canvas, viewType);
 
             if (!this.dragState) {
                 const hit = detectActionAtPos(pos, metrics);
@@ -956,7 +1070,7 @@ class FrameCard {
             if (e.button !== 0 || this.data.outside) return; // Only primary mouse button and not outside
 
             const pos = getCanvasPos(e);
-            const metrics = OrthoCanvasRenderer.getMetrics(canvas, this.data.box, viewType, this.lastRenderOptions);
+            const metrics = this.getInteractionMetrics(canvas, viewType);
             const hit = detectActionAtPos(pos, metrics);
 
             if (!hit) return;
@@ -1068,6 +1182,10 @@ class FrameCard {
                     viewType: this.dragState?.viewType || null,
                     hoverViewType: this.hoverState?.viewType || null,
                     hoverTarget: this.hoverState?.target || null,
+                    zoomViewType: this.zoomingViewType,
+                    zoomPercent: this.zoomingViewType
+                        ? Math.round(this.getViewZoom(this.zoomingViewType) * 100)
+                        : null,
                     resizeBoxPx: this.dragState?.resizeBoxPx || null,
                     translateOffsetPx: this.dragState?.translateOffsetPx || null
                 }
@@ -1100,7 +1218,13 @@ class FrameCard {
      */
     renderViews(pointCloudData, isCurrentFrame, options = {}) {
         this.lastPointCloudData = pointCloudData;
-        this.lastRenderOptions = options;
+        // Pointer interaction belongs to one animation frame only. Persisting it makes
+        // applyBoxChanges() replay a finished resize after pointerup: the active canvas
+        // blits its old background cache while the other views render fresh points.
+        // Keep only durable display preferences for the next non-interactive render.
+        const persistentOptions = { ...options };
+        delete persistentOptions.interaction;
+        this.lastRenderOptions = persistentOptions;
         this.isCurrent = isCurrentFrame;
 
         const { box, label } = this.data;
@@ -1125,22 +1249,24 @@ class FrameCard {
         let localPoints = null;
         if (options.interaction?.activeAction && this.dragState?.initialLocalPoints) {
             localPoints = this.dragState.initialLocalPoints;
+        } else if (this.zoomAnimationActive && this.lastRenderLocalPoints) {
+            // Zoom only changes camera scale; reuse transformed points during animation.
+            localPoints = this.lastRenderLocalPoints;
         } else if (pointCloudData && pointCloudData.positions) {
             localPoints = Math3D.transformAndCropPoints(
                 pointCloudData.positions,
                 pointCloudData.stride || 3,
                 box,
-                1.35
+                VIEW_MARGIN_FACTOR
             );
             this.lastRenderLocalPoints = localPoints;
         }
 
         const renderOptions = {
-            zoom,
             pointSize,
             color,
-            marginFactor: 1.35,
-            referenceBox: this.originalBox || box,
+            marginFactor: VIEW_MARGIN_FACTOR,
+            referenceBox: this.getViewportReferenceBox(),
             outside: !!this.data.outside,
             interaction: options.interaction || null
         };
@@ -1152,7 +1278,10 @@ class FrameCard {
             const cell = canvas?.parentElement;
             if (activeViews.includes(viewType)) {
                 if (cell) cell.style.display = 'flex';
-                OrthoCanvasRenderer.render(canvas, localPoints, box, viewType, renderOptions);
+                OrthoCanvasRenderer.render(canvas, localPoints, box, viewType, {
+                    ...renderOptions,
+                    zoom: zoom * this.getViewZoom(viewType)
+                });
             } else {
                 if (cell) cell.style.display = 'none';
             }

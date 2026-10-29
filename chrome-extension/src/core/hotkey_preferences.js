@@ -10,6 +10,7 @@
         ['undo', 'Chung', 'Undo', 'Mod+KeyZ', 'dock'],
         ['redo', 'Chung', 'Redo', 'Mod+KeyY', 'dock'],
         ['layout', 'Bố cục', 'Bật/tắt Split View 3D', 'Alt+KeyT', 'editor'],
+        ['fit_ground', 'Căn nền', 'Căn box theo mặt đường', 'Shift+KeyR', 'editor'],
         ['rotate_z_left', 'Xoay', 'Xoay trái quanh Z', 'KeyQ', 'editor'],
         ['rotate_z_right', 'Xoay', 'Xoay phải quanh Z', 'KeyW', 'editor'],
         ['rotate_side_left', 'Xoay', 'Xoay trái mặt Side', 'KeyE', 'editor'],
@@ -22,18 +23,18 @@
         ['move_backward', 'Di chuyển', 'Lùi', 'ArrowRight', 'editor'],
         ['move_up', 'Di chuyển', 'Nâng', 'ArrowUp', 'editor'],
         ['move_down', 'Di chuyển', 'Hạ', 'ArrowDown', 'editor'],
-        ['move_right', 'Di chuyển', 'Qua phải', 'Numpad1', 'editor'],
         ['move_left', 'Di chuyển', 'Qua trái', 'Numpad2', 'editor'],
-        ['resize_forward', 'Đổi một mặt', 'Nới mặt trước', 'Shift+ArrowLeft', 'editor'],
-        ['resize_backward', 'Đổi một mặt', 'Thu mặt sau', 'Shift+ArrowRight', 'editor'],
-        ['resize_up', 'Đổi một mặt', 'Nới mặt trên', 'Shift+ArrowUp', 'editor'],
-        ['resize_down', 'Đổi một mặt', 'Thu mặt dưới', 'Shift+ArrowDown', 'editor'],
-        ['resize_right', 'Đổi một mặt', 'Nới mặt phải', 'Shift+Numpad1', 'editor'],
-        ['resize_left', 'Đổi một mặt', 'Thu mặt trái', 'Shift+Numpad2', 'editor'],
-        ['preset_sedan', 'Kích thước mẫu', 'Sedan', 'Digit1', 'editor'],
-        ['preset_suv', 'Kích thước mẫu', 'SUV', 'Digit2', 'editor'],
-        ['preset_motorcycle', 'Kích thước mẫu', 'Xe máy', 'Digit3', 'editor'],
-        ['preset_pedestrian', 'Kích thước mẫu', 'Người đi bộ', 'Digit4', 'editor'],
+        ['move_right', 'Di chuyển', 'Qua phải', 'Numpad1', 'editor'],
+        ['resize_forward', 'Đổi một mặt', 'Nới mặt trước', '', 'editor'],
+        ['resize_backward', 'Đổi một mặt', 'Thu mặt sau', '', 'editor'],
+        ['resize_up', 'Đổi một mặt', 'Nới mặt trên', '', 'editor'],
+        ['resize_down', 'Đổi một mặt', 'Thu mặt dưới', '', 'editor'],
+        ['resize_right', 'Đổi một mặt', 'Nới mặt phải', '', 'editor'],
+        ['resize_left', 'Đổi một mặt', 'Thu mặt trái', '', 'editor'],
+        ['preset_sedan', 'Kích thước mẫu', 'Sedan', '', 'editor'],
+        ['preset_suv', 'Kích thước mẫu', 'SUV', '', 'editor'],
+        ['preset_motorcycle', 'Kích thước mẫu', 'Xe máy', '', 'editor'],
+        ['preset_pedestrian', 'Kích thước mẫu', 'Người đi bộ', '', 'editor'],
         ['sync_size', 'Toàn Track', 'Đồng bộ kích thước', 'KeyG', 'editor'],
         ['restore_size', 'Toàn Track', 'Khôi phục kích thước', 'Shift+KeyG', 'editor'],
         ['toggle_track_outside', 'Toàn Track', 'Bật/tắt Outside', 'KeyP', 'editor'],
@@ -50,7 +51,9 @@
         } catch (_) { return {}; }
     }
 
-    function combo(id) { return saved[id] || byId.get(id)?.defaultCombo || ''; }
+    function combo(id) {
+        return Object.hasOwn(saved, id) ? saved[id] : byId.get(id)?.defaultCombo || '';
+    }
     function eventCombo(event) {
         if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return '';
         const modifiers = [];
@@ -69,6 +72,7 @@
     }
 
     function format(value) {
+        if (!value) return '—';
         const names = { Mod: navigator.platform?.includes('Mac') ? '⌘' : 'Ctrl', Alt: navigator.platform?.includes('Mac') ? '⌥' : 'Alt', Shift: '⇧',
             ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓' };
         return String(value || '').split('+').map((part) => names[part] || part.replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'Num ')).join(' + ');
@@ -84,11 +88,19 @@
         return { ok: true };
     }
 
+    function clearCombo(id) {
+        if (!byId.has(id)) return { ok: false, message: 'Không tìm thấy chức năng cần xóa phím.' };
+        saved[id] = '';
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(saved));
+        window.dispatchEvent(new CustomEvent('cvat-qaqc-hotkeys-changed'));
+        return { ok: true };
+    }
+
     function reset() {
         saved = {};
         localStorage.removeItem(STORAGE_KEY);
         window.dispatchEvent(new CustomEvent('cvat-qaqc-hotkeys-changed'));
     }
 
-    global.CVATQAQC.HotkeyPreferences = { definitions, combo, eventCombo, matchEvent, format, setCombo, reset };
+    global.CVATQAQC.HotkeyPreferences = { definitions, combo, eventCombo, matchEvent, format, setCombo, clearCombo, reset };
 })(window);

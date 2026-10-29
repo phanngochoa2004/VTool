@@ -16,7 +16,7 @@
 (function registerHotkeys(global) {
     'use strict';
 
-const { Math3D, HotkeyPreferences, WorkspaceLayout } = global.CVATQAQC;
+const { Math3D, HotkeyPreferences, WorkspaceLayout, GroundFit } = global.CVATQAQC;
 
 function install3DHotkeys({ getInspectorTarget } = {}) {
     const config = {
@@ -60,6 +60,8 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
     let stopped = false;
     let lastSync = null;
     let lastOutside = null;
+    let groundAttachment = null;
+    let groundEpoch = 0;
 
     class StaleHotkeyError extends Error {
         constructor(message) {
@@ -128,7 +130,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
                             Array.isArray(annotation.annotations?.states) && (!state ||
                                 (annotation.player.frame.number === state.frame &&
                                     annotation.annotations.states.some((entry) => entry.clientID === state.clientID &&
-                                        entry.frame === state.frame && entry.objectType === 'track')))) return candidate;
+                                        entry.frame === state.frame)))) return candidate;
                     }
                     pending.push(fiber.return, fiber.alternate);
                 }
@@ -431,6 +433,64 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
         }
     }
 
+    function groundContext(item) {
+        const canvas = item?.canvas || findCanvas();
+        if (!canvas || stopped || pointers.size) {
+            throw new Error('Đợi thả chuột và chọn một box trên canvas CVAT trước khi căn nền.');
+        }
+        const { state } = selected(canvas);
+        const store = findStore(canvas, state);
+        const annotation = store.getState().annotation;
+        const job = annotation.job.instance;
+        const frame = state.frame;
+        const id = state.clientID;
+        const url = location.href;
+        const points = [...state.points];
+        const epoch = groundEpoch;
+        if (item && (item.id !== id || item.frame !== frame || item.url !== url)) {
+            throw new Error('Đã đổi box hoặc frame; hủy căn nền.');
+        }
+        const context = { canvas, store, job, frame, id, points, automatic: item?.automatic === true };
+        context.guard = () => {
+            const current = store.getState()?.annotation;
+            if (stopped || epoch !== groundEpoch || pointers.size || !canvas.isConnected ||
+                location.href !== url || current?.job?.instance !== job ||
+                current.player?.frame?.number !== frame || current.workspace === 'review' ||
+                current.canvas?.ready === false ||
+                (context.automatic && GroundFit?.status().automatic !== true)) {
+                throw new Error('Trạng thái trang đã đổi; hủy căn nền.');
+            }
+            const instance = current.canvas?.instance;
+            if (typeof instance?.mode === 'function' && instance.mode() !== 'idle') {
+                throw new Error('Ra khỏi chế độ vẽ/kéo trước khi căn nền.');
+            }
+            const active = selected(canvas).state;
+            if (active.clientID !== id || active.frame !== frame || !samePoints(active.points, points)) {
+                throw new Error('Box đã thay đổi trong lúc tính nền; giữ thay đổi hiện tại.');
+            }
+        };
+        context.guard();
+        return context;
+    }
+
+    function requestGroundFit(settings = {}) {
+        return new Promise((resolve, reject) => {
+            try {
+                if (!GroundFit) throw new Error('Chưa nạp chức năng căn box theo mặt đường.');
+                if (queue.length >= 12) throw new Error('Đang xử lý nhiều thao tác; đợi box cập nhật.');
+                const context = groundContext();
+                queue.push({ key: 'ground', canvas: context.canvas, id: context.id, frame: context.frame,
+                    url: location.href, automatic: settings.automatic === true, resolve, reject });
+                void drain();
+            } catch (error) { reject(error); }
+        });
+    }
+
+    function cancelQueue(message) {
+        for (const item of queue) item.reject?.(new Error(message));
+        queue.length = 0;
+    }
+
     async function apply(item) {
         if (stopped || location.href !== item.url || pointers.size) {
             throw new StaleHotkeyError('Đã đổi trang hoặc đang kéo chuột; bỏ thao tác đang chờ.');
@@ -463,6 +523,14 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
         if (state.clientID !== item.id || state.frame !== item.frame) {
             throw new StaleHotkeyError('Đã đổi box hoặc frame; bỏ thao tác đang chờ.');
         }
+        if (item.key === 'ground' && inspector) {
+            const result = await inspector.fitGround(state.points);
+            return report('Frame ' + item.frame + ': đã căn nền — dọc ' +
+                result.longitudinalDegrees.toFixed(1) + '°, ngang ' +
+                result.lateralDegrees.toFixed(1) + '°, sai số ' +
+                (result.rms * 100).toFixed(1) + ' cm, cao độ ' +
+                (result.heightChange >= 0 ? '+' : '') + (result.heightChange * 100).toFixed(1) + ' cm.');
+        }
         if (item.key === 'g') return syncSize(item, state);
         const points = [...state.points]; // Giữ cả các phần tử dự phòng sau index 8.
         const moves = {
@@ -470,7 +538,19 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             right: 'Numpad 1: qua phải', left: 'Numpad 2: qua trái',
         };
         let description;
-        if (item.resize) {
+        let groundResult = null;
+        if (item.key === 'ground') {
+            const context = groundContext(item);
+            groundResult = await GroundFit.compute(context);
+            context.guard();
+            points.splice(0, points.length, ...groundResult.points);
+            description = 'Đã căn nền: dọc ' + groundResult.longitudinalDegrees.toFixed(1) +
+                '°, ngang ' + groundResult.lateralDegrees.toFixed(1) + '°, sai số ' +
+                (groundResult.rms * 100).toFixed(1) + ' cm, phủ đáy ' +
+                Math.round(groundResult.footprintCoverage * 100) + '%, cao độ ' +
+                (groundResult.heightChange >= 0 ? '+' : '') + (groundResult.heightChange * 100).toFixed(1) +
+                ' cm. Ctrl+Z để hoàn tác; Save để lưu.';
+        } else if (item.resize) {
             const axis = resizeAxes[item.key];
             const step = config.resizeStep;
             if (!Number.isFinite(step) || step <= 0) throw new Error('Bước đổi kích thước phải là số dương.');
@@ -552,7 +632,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             );
             if (samePoints(current?.data?.points, points) && samePoints(current?.state?.points, points)) {
                 report(description);
-                return;
+                return groundResult;
             }
             if (!item.canvas.isConnected || location.href !== item.url || Date.now() > deadline) {
                 throw new Error('Chưa xác nhận được cập nhật. Kiểm tra box và thông báo lỗi của CVAT.');
@@ -565,9 +645,18 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
         if (running) return;
         running = true;
         try {
-            while (queue.length && !stopped) await apply(queue.shift());
+            while (queue.length && !stopped) {
+                const item = queue.shift();
+                try {
+                    const result = await apply(item);
+                    item.resolve?.(result);
+                } catch (error) {
+                    item.reject?.(error);
+                    throw error;
+                }
+            }
         } catch (error) {
-            queue.length = 0;
+            cancelQueue('Một thao tác trước đó thất bại; đã hủy hàng đợi còn lại.');
             if (error instanceof StaleHotkeyError) {
                 console.debug(`[CVAT 3D] ${error.message}`);
                 return;
@@ -590,6 +679,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
         if (!action) return;
         const actions = {
             layout: ['layout'], rotate_z_90: ['z'], swap_rotate_90: ['x'],
+            fit_ground: ['ground'],
             rotate_z_left: ['q'], rotate_z_right: ['w'], rotate_side_left: ['e'], rotate_side_right: ['r'],
             rotate_roll_right: ['roll_right'], rotate_roll_left: ['roll_left'],
             move_forward: ['forward'], move_backward: ['backward'], move_up: ['up'], move_down: ['down'],
@@ -623,6 +713,11 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
                     playerFrame: inspector.store?.getState()?.annotation?.player?.frame?.number,
                     resize, url: location.href });
             } else if (key === 'layout') queue.push({ key, canvas, url: location.href });
+            else if (key === 'ground') {
+                const context = groundContext();
+                queue.push({ key, canvas: context.canvas, id: context.id, frame: context.frame,
+                    url: location.href, automatic: false });
+            }
             else if (key === 'p') queue.push(restore ? outsideRestoreItem(canvas) : outsideItem(canvas));
             else {
                 const { state } = selected(canvas);
@@ -639,18 +734,31 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
     window.addEventListener('pointerdown', (event) => pointers.add(event.pointerId), options);
     window.addEventListener('pointerup', (event) => pointers.delete(event.pointerId), options);
     window.addEventListener('pointercancel', (event) => pointers.delete(event.pointerId), options);
-    window.addEventListener('blur', () => { pointers.clear(); queue.length = 0; }, options);
+    window.addEventListener('blur', () => {
+        pointers.clear();
+        groundEpoch += 1;
+        cancelQueue('Đã rời cửa sổ; hủy thao tác đang chờ.');
+    }, options);
 
     window.CVAT3DHotkeys = {
         config,
+        fitGround: requestGroundFit,
         get active() { return !stopped; },
         dispose() {
             stopped = true;
-            queue.length = 0;
+            groundEpoch += 1;
+            cancelQueue('Đã tắt bộ phím tắt.');
+            groundAttachment?.dispose();
             controller.abort();
             console.info('[CVAT 3D] Đã tắt phím tắt.');
         },
     };
+    groundAttachment = GroundFit?.attach({
+        active: () => !stopped,
+        context: () => groundContext(),
+        request: () => requestGroundFit({ automatic: true }),
+        report,
+    }) || null;
 }
 
 global.CVATQAQC.install3DHotkeys = install3DHotkeys;

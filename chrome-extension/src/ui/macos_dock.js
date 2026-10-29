@@ -7,7 +7,7 @@
 (function registerMacOSDock(global) {
     'use strict';
 
-const { FrameCard, SizeClipboard, TrackReader, HotkeyPreferences } = global.CVATQAQC;
+const { FrameCard, SizeClipboard, TrackReader, HotkeyPreferences, GroundFit } = global.CVATQAQC;
 
 class MacOSDock {
     /**
@@ -338,12 +338,41 @@ class MacOSDock {
         jumpBtn.title = 'Cuộn đến frame đang chọn trong CVAT';
         jumpBtn.addEventListener('click', () => this.scrollToActiveFrame());
 
-        // Help button: usage guide and complete keyboard shortcut reference
+        const groundFitBtn = document.createElement('button');
+        groundFitBtn.className = 'cvat-qaqc-btn cvat-qaqc-ground-fit-btn';
+        groundFitBtn.textContent = '⛰ Căn nền';
+        groundFitBtn.title = 'Căn card đang active theo mặt đường của đúng frame (Shift+R)';
+        groundFitBtn.setAttribute('aria-label', 'Căn box đang chọn theo mặt đường');
+        groundFitBtn.addEventListener('click', async () => {
+            if (groundFitBtn.disabled) return;
+            const original = '⛰ Căn nền';
+            groundFitBtn.disabled = true;
+            groundFitBtn.textContent = 'Đang căn…';
+            try {
+                const result = await this.fitGroundForCard();
+                const heightCm = result.heightChange * 100;
+                groundFitBtn.textContent = `✓ ${heightCm >= 0 ? '+' : ''}${heightCm.toFixed(1)} cm`;
+            } catch (error) {
+                groundFitBtn.textContent = '⚠ Không căn';
+                groundFitBtn.title = error.message;
+                console.warn(`[CVAT 3D] ${error.message}`);
+            } finally {
+                global.setTimeout(() => {
+                    if (!groundFitBtn.isConnected) return;
+                    groundFitBtn.disabled = false;
+                    groundFitBtn.textContent = original;
+                    groundFitBtn.title = 'Căn card đang active theo mặt đường của đúng frame (Shift+R)';
+                }, 1800);
+            }
+        });
+        this.groundFitBtn = groundFitBtn;
+
+        // Keyboard shortcut configuration
         const helpBtn = document.createElement('button');
         helpBtn.className = 'cvat-qaqc-btn cvat-qaqc-help-btn';
-        helpBtn.textContent = '?';
-        helpBtn.title = 'Hướng dẫn sử dụng và danh sách phím tắt';
-        helpBtn.setAttribute('aria-label', 'Mở hướng dẫn sử dụng và phím tắt');
+        helpBtn.textContent = '⌨';
+        helpBtn.title = 'Cấu hình phím';
+        helpBtn.setAttribute('aria-label', 'Mở cấu hình phím');
         helpBtn.setAttribute('aria-haspopup', 'dialog');
         helpBtn.setAttribute('aria-expanded', 'false');
         helpBtn.setAttribute('aria-controls', 'cvat-qaqc-help-dialog');
@@ -363,6 +392,7 @@ class MacOSDock {
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
         rightGroup.appendChild(jumpBtn);
+        rightGroup.appendChild(groundFitBtn);
         rightGroup.appendChild(helpBtn);
         rightGroup.appendChild(uiToggleBtn);
 
@@ -370,9 +400,9 @@ class MacOSDock {
         toolbar.appendChild(rightGroup);
         dock.appendChild(toolbar);
 
-        // Filmstrip Container (Medium by default)
+        // Match the toolbar's selected "Size: Lớn" option on first render.
         const filmstrip = document.createElement('div');
-        filmstrip.className = 'cvat-qaqc-filmstrip size-medium';
+        filmstrip.className = 'cvat-qaqc-filmstrip size-large';
         this.filmstrip = filmstrip;
         this.setupFilmstripScrollObserver();
 
@@ -409,9 +439,11 @@ class MacOSDock {
 
         let recordingAction = null;
         let settingsStatus = null;
-        const shortcutValues = new Map();
-        const refreshShortcutValues = () => shortcutValues.forEach((element, id) => {
-            element.textContent = HotkeyPreferences.format(HotkeyPreferences.combo(id));
+        const shortcutControls = new Map();
+        const refreshShortcutValues = () => shortcutControls.forEach(({ value, clear }, id) => {
+            const assignedCombo = HotkeyPreferences.combo(id);
+            value.textContent = HotkeyPreferences.format(assignedCombo);
+            clear.disabled = !assignedCombo;
         });
 
         const overlay = create('div', 'cvat-qaqc-help-overlay');
@@ -427,6 +459,16 @@ class MacOSDock {
                 if (event.key === 'Escape') {
                     settingsStatus.textContent = 'Đã hủy ghi phím.';
                     recordingAction = null;
+                    return;
+                }
+                if (['Delete', 'Backspace'].includes(event.key) &&
+                    !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+                    const result = HotkeyPreferences.clearCombo(recordingAction);
+                    settingsStatus.textContent = result.ok ? 'Đã xóa phím tắt. Chức năng hiện chưa được gán phím.' : result.message;
+                    if (result.ok) {
+                        recordingAction = null;
+                        refreshShortcutValues();
+                    }
                     return;
                 }
                 const value = HotkeyPreferences.eventCombo(event);
@@ -476,18 +518,18 @@ class MacOSDock {
 
         const header = create('header', 'cvat-qaqc-help-header');
         const headingGroup = create('div', 'cvat-qaqc-help-heading-group');
-        const eyebrow = create('span', 'cvat-qaqc-help-eyebrow', 'TRỢ GIÚP');
-        const title = create('h2', 'cvat-qaqc-help-title', '3D QA/QC Inspector');
+        const eyebrow = create('span', 'cvat-qaqc-help-eyebrow', 'PHÍM TẮT');
+        const title = create('h2', 'cvat-qaqc-help-title', 'Cấu hình phím');
         title.id = 'cvat-qaqc-help-title';
-        const subtitle = create('p', 'cvat-qaqc-help-subtitle', 'Chỉnh cuboid trong RAM của CVAT. Bấm Save trên CVAT để lưu lên server.');
+        const subtitle = create('p', 'cvat-qaqc-help-subtitle', 'Ghi lại tổ hợp phím phù hợp với quy trình làm việc của bạn.');
         headingGroup.appendChild(eyebrow);
         headingGroup.appendChild(title);
         headingGroup.appendChild(subtitle);
 
         const closeBtn = create('button', 'cvat-qaqc-help-close', 'Đóng');
         closeBtn.type = 'button';
-        closeBtn.title = 'Đóng hướng dẫn (Esc)';
-        closeBtn.setAttribute('aria-label', 'Đóng hướng dẫn');
+        closeBtn.title = 'Đóng cấu hình phím (Esc)';
+        closeBtn.setAttribute('aria-label', 'Đóng cấu hình phím');
         closeBtn.addEventListener('click', () => this.closeHelp());
         this.helpCloseBtn = closeBtn;
 
@@ -495,97 +537,28 @@ class MacOSDock {
         header.appendChild(closeBtn);
         panel.appendChild(header);
 
-        const tabs = create('div', 'cvat-qaqc-help-tabs');
-        tabs.setAttribute('role', 'tablist');
-        const guideTab = create('button', 'cvat-qaqc-help-tab active', 'Hướng dẫn');
-        const settingsTab = create('button', 'cvat-qaqc-help-tab', 'Cấu hình phím');
-        for (const tab of [guideTab, settingsTab]) tab.type = 'button';
-        guideTab.setAttribute('role', 'tab');
-        settingsTab.setAttribute('role', 'tab');
-        guideTab.setAttribute('aria-selected', 'true');
-        settingsTab.setAttribute('aria-selected', 'false');
-        tabs.append(guideTab, settingsTab);
-        panel.appendChild(tabs);
-
-        const body = create('div', 'cvat-qaqc-help-body');
-        body.setAttribute('role', 'document');
-
-        const addSection = (sectionTitle, rows) => {
-            const section = create('section', 'cvat-qaqc-help-section');
-            section.appendChild(create('h3', 'cvat-qaqc-help-section-title', sectionTitle));
-            const grid = create('div', 'cvat-qaqc-help-grid');
-            for (const [keys, description] of rows) {
-                const keyCell = create('div', 'cvat-qaqc-help-keys');
-                for (const key of keys) keyCell.appendChild(create('kbd', '', key));
-                grid.appendChild(keyCell);
-                grid.appendChild(create('div', 'cvat-qaqc-help-description', description));
-            }
-            section.appendChild(grid);
-            body.appendChild(section);
-        };
-
-        addSection('Bắt đầu', [
-            [['1'], 'Chọn một cuboid hoặc Track trong CVAT.'],
-            [['2'], 'Bấm nút 3D hoặc Alt+Q để mở Inspector.'],
-            [['3'], 'Trỏ chuột hoặc focus vào card frame cần sửa.'],
-            [['4'], 'Chỉnh box, kiểm tra ba góc nhìn, rồi bấm Save trên CVAT.']
-        ]);
-
-        addSection('Thao tác chuột và card', [
-            [['Kéo box'], 'Dịch vị trí theo mặt Top, Side hoặc Front.'],
-            [['Kéo góc đỏ'], 'Đổi hai kích thước; giữ nguyên góc đối diện.'],
-            [['Kéo chấm xanh'], 'Xoay Yaw trên mặt Top.'],
-            [['↺ / ↻'], 'Xoay Yaw, Pitch hoặc Roll theo nút trên từng góc nhìn.'],
-            [['Jump'], 'Chuyển player CVAT đến frame của card.'],
-            [['Copy / Dán'], 'Sao chép hoặc áp dụng W × L × H cho frame.'],
-            [['Cố định All'], 'Áp dụng kích thước hiện tại cho keyframe toàn Track.'],
-            [['Outside'], 'Bật hoặc tắt trạng thái Outside của frame.']
-        ]);
-
-        addSection('Mở panel và lịch sử', [
-            [['Alt', 'Q'], 'Mở hoặc ẩn Inspector.'],
-            [['Alt', 'C'], 'Copy kích thước card active.'],
-            [['Alt', 'V'], 'Dán kích thước vào card active.'],
-            [['O'], 'Bật hoặc tắt Outside của card đang trỏ hoặc frame active.'],
-            [['Ctrl/Cmd', 'Z'], 'Undo card đang trỏ; nếu hết lịch sử thì Undo CVAT.'],
-            [['Ctrl/Cmd', 'Y'], 'Redo card đang trỏ hoặc Redo CVAT.']
-        ]);
-
-        addSection('Dịch chuyển và đổi một mặt', [
-            [['← / →'], 'Tiến hoặc lùi 4 cm theo hướng box.'],
-            [['↑ / ↓'], 'Nâng hoặc hạ box 4 cm.'],
-            [['Num 1 / Num 2'], 'Dịch ngang phải hoặc trái 4 cm.'],
-            [['Shift', '← / →'], 'Nới mặt trước hoặc thu mặt sau 6 cm.'],
-            [['Shift', '↑ / ↓'], 'Nới mặt trên hoặc thu mặt dưới 6 cm.'],
-            [['Shift', 'Num 1 / Num 2'], 'Nới mặt phải hoặc thu mặt trái 6 cm.']
-        ]);
-
-        addSection('Xoay và kích thước mẫu', [
-            [['Q / W'], 'Xoay trái hoặc phải 2° quanh trục Z point cloud.'],
-            [['E / R'], 'Xoay trái hoặc phải 2° quanh trục Y cục bộ.'],
-            [['Num 4 / Num 5'], 'Nghiêng ngang phải hoặc trái 3° quanh trục X cục bộ.'],
-            [['Z'], 'Xoay trái 90° quanh trục Z point cloud.'],
-            [['X'], 'Xoay 90° cục bộ và đổi chiều dài/rộng.'],
-            [['1'], 'Kích thước Sedan: 4.5 × 1.85 × 1.5 m.'],
-            [['2'], 'Kích thước SUV: 4.7 × 1.95 × 1.65 m.'],
-            [['3'], 'Kích thước xe máy: 1.85 × 0.8 × 1.5 m.'],
-            [['4'], 'Kích thước người đi bộ: 0.6 × 0.6 × 1.7 m.']
-        ]);
-
-        addSection('Toàn Track và bố cục', [
-            [['G'], 'Đồng bộ kích thước card đang trỏ sang mọi keyframe cùng Track.'],
-            [['Shift', 'G'], 'Khôi phục lần đồng bộ kích thước gần nhất trong phiên.'],
-            [['P'], 'Bật hoặc tắt Outside trên toàn bộ keyframe cùng Track.'],
-            [['Shift', 'P'], 'Khôi phục lần Outside toàn Track gần nhất trong phiên.'],
-            [['Alt', 'T'], 'Bật/tắt Split View: 3D trái 52%, Top phải trên, Side/Front phải dưới.']
-        ]);
-
-        const note = create('p', 'cvat-qaqc-help-note', 'Phím chỉnh box không tự lặp khi giữ. Phím bị khóa khi đang nhập liệu, mở hộp thoại, kéo chuột hoặc box không thể chỉnh sửa.');
-        body.appendChild(note);
         const settingsBody = create('div', 'cvat-qaqc-help-body cvat-qaqc-hotkey-settings');
-        settingsBody.hidden = true;
-        const intro = create('p', 'cvat-qaqc-help-note', 'Bấm “Ghi phím”, sau đó nhấn 1 phím hoặc 1 phím bổ trợ + 1 phím chính. Cấu hình tự lưu trên trình duyệt này.');
+        settingsBody.setAttribute('role', 'document');
+        const intro = create('p', 'cvat-qaqc-help-note', 'Bấm “Ghi phím” để gán phím. Bấm “Xóa phím” để bỏ gán, hoặc nhấn Delete/Backspace khi đang ghi. Cấu hình tự lưu trên trình duyệt này.');
         settingsBody.appendChild(intro);
+        if (GroundFit) {
+            const groundSection = create('section', 'cvat-qaqc-help-section');
+            groundSection.appendChild(create('h3', 'cvat-qaqc-help-section-title', 'Căn nền tự động'));
+            const groundRow = create('label', 'cvat-qaqc-ground-auto-row');
+            const groundText = create('span', 'cvat-qaqc-ground-auto-text',
+                'Tự căn khi chọn box trên canvas CVAT (chỉ trong phiên hiện tại)');
+            const groundToggle = create('input', 'cvat-qaqc-ground-auto-toggle');
+            groundToggle.type = 'checkbox';
+            groundToggle.checked = GroundFit.status().automatic;
+            groundToggle.addEventListener('change', () => {
+                GroundFit.setAutomatic(groundToggle.checked);
+                settingsStatus.textContent = groundToggle.checked ?
+                    'Đã bật tự căn nền trong phiên này.' : 'Đã tắt tự căn nền.';
+            });
+            groundRow.append(groundText, groundToggle);
+            groundSection.appendChild(groundRow);
+            settingsBody.appendChild(groundSection);
+        }
         const categories = new Map();
         for (const definition of HotkeyPreferences.definitions) {
             if (!categories.has(definition.category)) {
@@ -599,15 +572,32 @@ class MacOSDock {
             const row = create('div', 'cvat-qaqc-hotkey-row');
             row.appendChild(create('span', 'cvat-qaqc-hotkey-label', definition.label));
             const value = create('kbd', 'cvat-qaqc-hotkey-value', HotkeyPreferences.format(HotkeyPreferences.combo(definition.id)));
-            shortcutValues.set(definition.id, value);
             row.appendChild(value);
             const record = create('button', 'cvat-qaqc-hotkey-record', 'Ghi phím');
             record.type = 'button';
+            record.setAttribute('aria-label', `Ghi phím cho ${definition.label}`);
             record.addEventListener('click', () => {
                 recordingAction = definition.id;
-                settingsStatus.textContent = `Đang ghi “${definition.label}”…`;
+                settingsStatus.textContent = `Đang ghi “${definition.label}”… Delete/Backspace để xóa phím, Esc để hủy.`;
             });
             row.appendChild(record);
+            const clear = create('button', 'cvat-qaqc-hotkey-clear', 'Xóa phím');
+            clear.title = 'Bỏ gán phím tắt cho chức năng này';
+            clear.type = 'button';
+            clear.disabled = !HotkeyPreferences.combo(definition.id);
+            clear.setAttribute('aria-label', `Xóa phím của ${definition.label}`);
+            clear.addEventListener('click', () => {
+                const result = HotkeyPreferences.clearCombo(definition.id);
+                if (!result.ok) {
+                    settingsStatus.textContent = result.message;
+                    return;
+                }
+                recordingAction = null;
+                refreshShortcutValues();
+                settingsStatus.textContent = `Đã xóa phím của “${definition.label}”.`;
+            });
+            shortcutControls.set(definition.id, { value, clear });
+            row.appendChild(clear);
             categories.get(definition.category).appendChild(row);
         }
         const footer = create('div', 'cvat-qaqc-hotkey-footer');
@@ -624,19 +614,6 @@ class MacOSDock {
         footer.append(settingsStatus, reset);
         settingsBody.appendChild(footer);
 
-        const selectTab = (settings) => {
-            body.hidden = settings;
-            settingsBody.hidden = !settings;
-            guideTab.classList.toggle('active', !settings);
-            settingsTab.classList.toggle('active', settings);
-            guideTab.setAttribute('aria-selected', String(!settings));
-            settingsTab.setAttribute('aria-selected', String(settings));
-            recordingAction = null;
-        };
-        guideTab.addEventListener('click', () => selectTab(false));
-        settingsTab.addEventListener('click', () => selectTab(true));
-
-        panel.appendChild(body);
         panel.appendChild(settingsBody);
         overlay.appendChild(panel);
         this.helpDialog = overlay;
@@ -711,6 +688,7 @@ class MacOSDock {
                 this.state.activeClientID === clientID && this.callbacks.getJob?.() === job,
             refresh: () => this.callbacks.onRefreshTrack?.(clientID),
             read: () => this.callbacks.onReadCuboid(frame, clientID),
+            fitGround: (points) => this.fitGroundForCard(frame, points),
             update: async (points) => {
                 if (this.state.activeClientID !== clientID || this.callbacks.getJob?.() !== job) {
                     throw new Error('Đã đổi track/job; bỏ phím đang chờ.');
@@ -723,6 +701,85 @@ class MacOSDock {
                 }
             },
         };
+    }
+
+    static pointCloudXYZ(pointCloud) {
+        const positions = pointCloud?.positions;
+        const stride = Number(pointCloud?.stride || 3);
+        if (!positions?.length || !Number.isInteger(stride) || stride < 3 || positions.length % stride) {
+            throw new Error('Point cloud của frame không hợp lệ hoặc chưa tải xong.');
+        }
+        if (stride === 3) return positions;
+        const xyz = new Float32Array((positions.length / stride) * 3);
+        for (let source = 0, target = 0; source < positions.length; source += stride) {
+            xyz[target++] = positions[source];
+            xyz[target++] = positions[source + 1];
+            xyz[target++] = positions[source + 2];
+        }
+        return xyz;
+    }
+
+    static sameCuboidPoints(left, right) {
+        return Array.isArray(left) && Array.isArray(right) && left.length >= 9 && right.length >= 9 &&
+            left.slice(0, 9).every((value, index) => Math.abs(value - right[index]) <= 1e-9);
+    }
+
+    resolveGroundFitCard(frame = null) {
+        const preferredFrame = frame ?? this.hoveredFrame ?? this.hotkeyFrame ?? this.state.currentFrame;
+        return this.cards.get(preferredFrame) || this.cards.get(this.state.currentFrame) ||
+            this.cards.values().next().value || null;
+    }
+
+    /** Fit an Inspector card against the point cloud cached for that exact frame. */
+    async fitGroundForCard(frame = null, sourcePoints = null) {
+        if (!GroundFit?.engine) throw new Error('Chức năng căn nền chưa sẵn sàng.');
+        const card = this.resolveGroundFitCard(frame);
+        const clientID = this.state.activeClientID;
+        const job = this.callbacks.getJob?.();
+        if (!card?.data?.box || clientID === null || clientID === undefined) {
+            throw new Error('Chưa có card frame đang active để căn nền.');
+        }
+        const targetFrame = card.frame;
+        const cloud = this.pcdCache?.get?.(targetFrame) || card.lastPointCloudData;
+        const positions = MacOSDock.pointCloudXYZ(cloud);
+
+        let points = Array.isArray(sourcePoints) ? [...sourcePoints] : null;
+        if (!points && typeof this.callbacks.onReadCuboid === 'function') {
+            const state = await this.callbacks.onReadCuboid(targetFrame, clientID);
+            points = Array.isArray(state?.points) ? [...state.points] : null;
+        }
+        if (!points) points = [...(card.data.points || [])];
+        if (points.length < 9) throw new Error('Dữ liệu cuboid của card không hợp lệ.');
+
+        const snapshot = card.takeSnapshot();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const result = GroundFit.engine.align(
+            points,
+            GroundFit.engine.estimate(positions, points, GroundFit.config),
+            GroundFit.config
+        );
+
+        if (this.state.activeClientID !== clientID || this.callbacks.getJob?.() !== job ||
+            this.cards.get(targetFrame) !== card || card.dragState) {
+            throw new Error('Đã đổi card, track hoặc job trong lúc tính nền; hủy cập nhật.');
+        }
+        if (typeof this.callbacks.onReadCuboid === 'function') {
+            const current = await this.callbacks.onReadCuboid(targetFrame, clientID);
+            if (!MacOSDock.sameCuboidPoints(current?.points, points)) {
+                throw new Error('Box đã thay đổi trong lúc tính nền; giữ thay đổi hiện tại.');
+            }
+        }
+
+        const nextPoints = [...result.points];
+        const nextBox = TrackReader.parsePointsToBox(nextPoints);
+        if (typeof this.callbacks.onUpdateCuboid === 'function') {
+            const saved = await this.callbacks.onUpdateCuboid(targetFrame, clientID, nextPoints, nextBox);
+            if (saved === false) throw new Error('CVAT chưa nhận được kết quả căn nền của card.');
+        }
+
+        card.pushUndoSnapshot(snapshot);
+        card.updateData({ ...card.data, points: nextPoints, box: nextBox, keyframe: true });
+        return result;
     }
 
     setupKeyboardShortcuts() {
