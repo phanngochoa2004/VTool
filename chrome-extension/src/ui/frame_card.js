@@ -8,12 +8,26 @@
     'use strict';
 
 const { Math3D, OrthoCanvasRenderer, TrackReader, SizeClipboard } = global.CVATQAQC;
-const VIEW_MARGIN_FACTOR = 1.10;
+const VIEW_MARGIN_FACTOR = 1.45;
+const DEPTH_MARGIN_FACTOR = 1.10;
 const MIN_VIEW_ZOOM = 0.45;
 const MAX_VIEW_ZOOM = 2.75;
 const WHEEL_ZOOM_SPEED = 0.0015;
 
 class FrameCard {
+    /** Expand only the two visible axes. Keep projection depth as a narrow slab. */
+    static pointCropFactors(box, viewType, effectiveZoom) {
+        const zoom = Number.isFinite(effectiveZoom) && effectiveZoom > 0 ? effectiveZoom : 1;
+        const factor = Math.min(3, VIEW_MARGIN_FACTOR / Math.min(1, zoom));
+        const visible = { top: ['x', 'y'], side: ['x', 'z'], front: ['y', 'z'] }[viewType] || [];
+        const dimensions = { x: box.sx, y: box.sy, z: box.sz };
+        return Object.fromEntries(['x', 'y', 'z'].map((axis) => {
+            const size = Math.max(0.01, dimensions[axis]);
+            return [axis, visible.includes(axis)
+                ? Math.min(factor, VIEW_MARGIN_FACTOR + 6 / size) : DEPTH_MARGIN_FACTOR];
+        }));
+    }
+
     /**
      * @param {Object} data - { frame, points, box, keyframe, outside, label }
      * @param {Function} onSelectFrame - callback when clicked to jump
@@ -212,32 +226,11 @@ class FrameCard {
             await this.handlePasteSize(pasteBtn);
         });
 
-        // Fix / Apply to All Frames Button (Compact)
-        const fixAllBtn = document.createElement('button');
-        fixAllBtn.className = 'cvat-qaqc-card-btn cvat-qaqc-apply-all-btn';
-        fixAllBtn.textContent = '⚡ Cố định All';
-        fixAllBtn.title = 'Cố định kích thước của frame này cho TẤT CẢ các frame của track (Realtime)';
-        fixAllBtn.addEventListener('click', async (e) => {
-            e.stopPropagation();
-            await this.handlePasteSizeToAll(fixAllBtn);
-        });
-
-        // Jump Button
-        const jumpBtn = document.createElement('button');
-        jumpBtn.className = 'cvat-qaqc-jump-btn';
-        jumpBtn.textContent = '↗ Nhảy / Jump';
-        jumpBtn.title = `Chuyển vùng nhìn CVAT đến Frame ${this.frame}`;
-        jumpBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            this.triggerJump();
-        });
 
         rightGroup.appendChild(historyGroup);
         rightGroup.appendChild(outsideBtn);
         rightGroup.appendChild(copyBtn);
         rightGroup.appendChild(pasteBtn);
-        rightGroup.appendChild(fixAllBtn);
-        rightGroup.appendChild(jumpBtn);
 
         header.appendChild(leftGroup);
         header.appendChild(rightGroup);
@@ -364,8 +357,7 @@ class FrameCard {
         const axisName = viewType === 'top' ? 'Yaw' : (viewType === 'front' ? 'Roll' : 'Pitch');
         group.title = `Xoay góc ${axisName}`;
 
-        const isTop = viewType === 'top';
-        const stepDeg = isTop ? 5 : 1;
+        const stepDeg = Math3D.rotationStepDegrees(viewType);
         const stepRad = stepDeg * Math.PI / 180;
 
         const buttons = [
@@ -1245,6 +1237,12 @@ class FrameCard {
         // View Mode Class
         this.grid.className = `cvat-qaqc-views-grid mode-${viewMode}`;
 
+        const activeViews = viewMode === 'all' ? ['top', 'side', 'front'] : [viewMode];
+        const crops = Object.fromEntries(activeViews.map((view) => [view,
+            FrameCard.pointCropFactors(box, view, zoom * this.getViewZoom(view))]));
+        const unionCrop = Object.fromEntries(['x', 'y', 'z'].map((axis) =>
+            [axis, Math.max(...activeViews.map((view) => crops[view][axis]))]));
+
         // Transform points to local box coordinate frame (cached during any active drag to eliminate GC stutter)
         let localPoints = null;
         if (options.interaction?.activeAction && this.dragState?.initialLocalPoints) {
@@ -1257,7 +1255,7 @@ class FrameCard {
                 pointCloudData.positions,
                 pointCloudData.stride || 3,
                 box,
-                VIEW_MARGIN_FACTOR
+                unionCrop
             );
             this.lastRenderLocalPoints = localPoints;
         }
@@ -1271,8 +1269,6 @@ class FrameCard {
             interaction: options.interaction || null
         };
 
-        const activeViews = viewMode === 'all' ? ['top', 'side', 'front'] : [viewMode];
-
         for (const viewType of ['top', 'side', 'front']) {
             const canvas = this.canvases[viewType];
             const cell = canvas?.parentElement;
@@ -1280,6 +1276,9 @@ class FrameCard {
                 if (cell) cell.style.display = 'flex';
                 OrthoCanvasRenderer.render(canvas, localPoints, box, viewType, {
                     ...renderOptions,
+                    pointCropFactors: crops[viewType],
+                    contextOpacity: 0.75,
+                    contextPointSize: Math.max(1.5, pointSize),
                     zoom: zoom * this.getViewZoom(viewType)
                 });
             } else {

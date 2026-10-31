@@ -243,16 +243,18 @@ class OrthoCanvasRenderer {
             const pointSize = typeof options.pointSize === 'number' ? options.pointSize : 1.0;
 
             if (localPoints && localPoints.length > 0) {
-                renderedPointsCount = Math.floor(localPoints.length / 4);
-
                 // Collect points into 32 pre-quantized depth buckets to eliminate per-point fill() overhead
-                const buckets = new Array(PALETTE_SIZE);
-                for (let b = 0; b < PALETTE_SIZE; b++) buckets[b] = [];
+                const buckets = new Array(PALETTE_SIZE * 2);
+                for (let b = 0; b < buckets.length; b++) buckets[b] = [];
+                const crop = options.pointCropFactors;
+                const contextOpacity = options.contextOpacity ?? 1;
 
                 for (let i = 0; i < localPoints.length; i += 4) {
                     const lx = localPoints[i];
                     const ly = localPoints[i + 1];
                     const lz = localPoints[i + 2];
+                    if (crop && (Math.abs(lx) > sx * crop.x / 2 ||
+                        Math.abs(ly) > sy * crop.y / 2 || Math.abs(lz) > sz * crop.z / 2)) continue;
 
                     let px = 0, py = 0, depth = 0;
 
@@ -271,25 +273,33 @@ class OrthoCanvasRenderer {
                     }
 
                     if (px < 0 || px > width || py < 0 || py > height) continue;
+                    renderedPointsCount++;
 
                     const bin = Math.min(PALETTE_SIZE - 1, Math.max(0, (depth * PALETTE_SIZE) | 0));
-                    buckets[bin].push(px, py);
+                    const outside = Math.abs(lx) > sx / 2 || Math.abs(ly) > sy / 2 || Math.abs(lz) > sz / 2;
+                    buckets[bin + (outside ? PALETTE_SIZE : 0)].push(px, py);
                 }
 
-                // Batch draw each bucket in a single path (max 32 draw calls instead of 20,000)
+                // Batch draw depth/context buckets (max 64 draw calls instead of per-point fills).
                 const ptSize = Math.max(1.0, pointSize);
-                const half = ptSize / 2;
-                for (let b = 0; b < PALETTE_SIZE; b++) {
+                const originalAlpha = ctx.globalAlpha;
+                // Context first, so points inside the cuboid remain prominent on overlap.
+                for (let index = 0; index < buckets.length; index++) {
+                    const b = (index + PALETTE_SIZE) % buckets.length;
                     const pts = buckets[b];
                     const len = pts.length;
                     if (len === 0) continue;
-                    ctx.fillStyle = DEPTH_PALETTE[b];
+                    ctx.globalAlpha = originalAlpha * (b >= PALETTE_SIZE ? contextOpacity : 1);
+                    ctx.fillStyle = DEPTH_PALETTE[b % PALETTE_SIZE];
+                    const size = b >= PALETTE_SIZE ? Math.max(ptSize, options.contextPointSize || ptSize) : ptSize;
+                    const half = size / 2;
                     ctx.beginPath();
                     for (let j = 0; j < len; j += 2) {
-                        ctx.rect(pts[j] - half, pts[j + 1] - half, ptSize, ptSize);
+                        ctx.rect(pts[j] - half, pts[j + 1] - half, size, size);
                     }
                     ctx.fill();
                 }
+                ctx.globalAlpha = originalAlpha;
             }
 
             // Snapshot background layer for instant 120 FPS dragging at 100% native device resolution (zero blur)

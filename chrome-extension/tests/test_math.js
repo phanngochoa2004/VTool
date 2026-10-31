@@ -262,7 +262,7 @@ console.assert(CVATHook.sameCuboidPoints(realtimeDrawn.data.points, realtimeNewP
     'Realtime Three.js geometry must match the requested cuboid points');
 console.log('✓ CVATHook visible-frame cuboid updates through native realtime canvas path');
 
-// 10. Test discrete rotation increments for Top (5°, 90°) and Side/Front (1°, 90°)
+// 10. Test discrete rotation increments for Top (3°, 90°) and Side/Front (1°, 90°)
 const rotateAngle = (currentVal, deltaRad) => {
     let nextVal = currentVal + deltaRad;
     while (nextVal > Math.PI) nextVal -= Math.PI * 2;
@@ -270,16 +270,16 @@ const rotateAngle = (currentVal, deltaRad) => {
     return parseFloat(nextVal.toFixed(4));
 };
 
-// Top: 5° and 90° increments
+// Top: 3° and 90° increments
 let yaw = 0;
-yaw = rotateAngle(yaw, 5 * Math.PI / 180);
-console.assert(Math.abs(yaw - (5 * Math.PI / 180)) < 1e-4, 'Top +5 deg test');
+yaw = rotateAngle(yaw, 3 * Math.PI / 180);
+console.assert(Math.abs(yaw - (3 * Math.PI / 180)) < 1e-4, 'Top +3 deg test');
 yaw = rotateAngle(yaw, Math.PI / 2);
-console.assert(Math.abs(yaw - (95 * Math.PI / 180)) < 1e-4, 'Top +90 deg test');
+console.assert(Math.abs(yaw - (93 * Math.PI / 180)) < 1e-4, 'Top +90 deg test');
 yaw = rotateAngle(yaw, -Math.PI / 2);
-console.assert(Math.abs(yaw - (5 * Math.PI / 180)) < 1e-4, 'Top -90 deg test');
-yaw = rotateAngle(yaw, -5 * Math.PI / 180);
-console.assert(Math.abs(yaw - 0) < 1e-4, 'Top -5 deg test');
+console.assert(Math.abs(yaw - (3 * Math.PI / 180)) < 1e-4, 'Top -90 deg test');
+yaw = rotateAngle(yaw, -3 * Math.PI / 180);
+console.assert(Math.abs(yaw - 0) < 1e-4, 'Top -3 deg test');
 
 // Side / Front: 1° and 90° increments
 let pitch = 0;
@@ -291,7 +291,21 @@ pitch = rotateAngle(pitch, -Math.PI / 2);
 console.assert(Math.abs(pitch - (1 * Math.PI / 180)) < 1e-4, 'Side/Front -90 deg test');
 pitch = rotateAngle(pitch, -1 * Math.PI / 180);
 console.assert(Math.abs(pitch - 0) < 1e-4, 'Side/Front -1 deg test');
-console.log('✓ Discrete rotation increments (Top: 5°, 90°; Side/Front: 1°, 90°) passed');
+console.log('✓ Discrete rotation increments (Top: 3°, 90°; Side/Front: 1°, 90°) passed');
+for (const [key, view, degrees] of [
+    ['q', 'top', -3], ['w', 'top', 3], ['e', 'side', -1], ['r', 'side', 1],
+    ['roll_right', 'front', 1], ['roll_left', 'front', -1], ['z', 'top', -90],
+]) {
+    const action = Math3D.hotkeyRotation(key);
+    if (action.view !== view || action.degrees !== degrees) throw new Error(`Incorrect button mapping for ${key}`);
+    for (const angles of [[0, 0, 0], [0.2, -0.3, 1.4]]) {
+        const box = { rx: angles[0], ry: angles[1], rz: angles[2] };
+        const expected = Math3D.rotateLocal(box, view, degrees * Math.PI / 180);
+        const actual = Math3D.rotateLocal(box, action.view, action.degrees * Math.PI / 180);
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error(`UI rotation mismatch for ${key}`);
+    }
+}
+console.log('✓ Shortcut angles, signs and local axes match view buttons');
 
 // 11. Test 3-axis rotation across Top (Yaw / rz), Front (Roll / rx), and Side (Pitch / ry)
 // Verifies authentic 3D local-axis rotation and independence from yaw cross-coupling
@@ -747,7 +761,7 @@ console.assert(Math.abs((fittedTop.boxPxW / fittedTop.boxPxH) - (nearSquareBox.s
 console.log('✓ Large-card balanced horizontal/vertical fit preserves aspect ratio');
 
 // Hit-testing must use the same projection as the visible red corner handles.
-// This guards against regressions where drawing uses the fitted 1.10 margin and
+// This guards against regressions where drawing uses the fitted viewport margin and
 // a stable reference box, but pointer hover silently falls back to other values.
 const hitTestCard = Object.create(FrameCard.prototype);
 hitTestCard.data = {
@@ -761,7 +775,7 @@ const visibleHandleMetrics = OrthoCanvasRenderer.getMetrics(
     'top',
     {
         zoom: 1.0,
-        marginFactor: 1.10,
+        marginFactor: 1.45,
         referenceBox: hitTestCard.originalBox,
     },
 );
@@ -1067,6 +1081,20 @@ console.assert(parsedPCD.count === 2 && parsedPCD.positions.length === 6 && pars
     'Ground-fit ASCII PCD parser should preserve XYZ points');
 console.log('✓ Ground fitting, slope alignment and in-memory PCD parsing passed');
 
+const notifications = window.CVATQAQC.Notifications;
+notifications.showError('Chưa tìm được nền độc lập quanh box.', { title: 'Không thể căn nền bằng RANSAC' });
+notifications.showError('Chưa tìm được nền độc lập quanh box.', { title: 'Không thể căn nền bằng RANSAC' });
+if (document.querySelectorAll('.cvat-qaqc-notification').length !== 1) throw new Error('Repeated errors must be deduplicated');
+notifications.showError('<img src=x onerror=alert(1)>');
+if (document.querySelector('.cvat-qaqc-notifications img')) throw new Error('Error messages must render as text');
+notifications.showError('Point cloud chưa tải xong.');
+notifications.showError('Box đang khóa.');
+if (document.querySelectorAll('.cvat-qaqc-notification').length !== 3) throw new Error('Maximum three error notices');
+document.querySelector('.cvat-qaqc-notification button').click();
+if (document.querySelectorAll('.cvat-qaqc-notification').length !== 2) throw new Error('Close must dismiss notice');
+notifications.clear();
+if (document.querySelector('.cvat-qaqc-notification')) throw new Error('Clear must remove error notices');
+console.log('✓ Error notices: deduplication, safe text, bounded stack and dismissal passed');
 console.log('All Unit Tests Passed Successfully!');
 })().catch((error) => {
     console.error('Browser math test failed:', error);

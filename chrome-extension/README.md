@@ -27,7 +27,7 @@ Công cụ kiểm định chất lượng (QA/QC) gán nhãn 3D Point Cloud chuy
      - **Kích thước (Size)**: Tăng/giảm chiều rộng $W$, chiều dài $L$, chiều cao $H$ từng bước $0.05\text{m}$ (giữ `Shift` để bước nhảy $\times 5 = 0.25\text{m}$).
      - **Góc quay (Yaw / Rotation)**:
        - Xoay tinh chỉnh: `[↺ -1°]`, `[↻ +1°]`.
-       - Xoay nhanh: `[↺ -5°]`, `[↻ +5°]`.
+       - Xoay nhanh: `[↺ -3°]`, `[↻ +3°]`.
        - **Đảo chiều 180° (`⟲ Đảo 180°`)**: Lật ngược hướng đầu xe chỉ với 1 click khi annotator gán ngược đầu xe.
      - **Hoàn tác (`↺ Hoàn tác / Reset`)**: Khôi phục lại trạng thái ban đầu của frame nếu thao tác nhầm.
    - **Tái kết xuất tức thì (Real-time Re-rendering)**: 3 khung canvas Top, Front, Side tự động chiếu lại các hạt point cloud theo thông số mới ngay lập tức mà không cần tải lại.
@@ -39,9 +39,10 @@ Công cụ kiểm định chất lượng (QA/QC) gán nhãn 3D Point Cloud chuy
 5. **Bộ Zoom Đa Cấp (< 100% Đến 200%)**:
    - Hỗ trợ các mức thu nhỏ dưới 100% để quan sát không gian rộng quanh cuboid:
      - `Zoom 40%`, `Zoom 60%`, `Zoom 80%`, `Zoom 100%`, `Zoom 125%`, `Zoom 150%`, `Zoom 200%`.
+   - Mức 100% chừa vùng nhìn hệ số 1.45 quanh box để thao tác tay nắm và quan sát điểm bên ngoài. Khi zoom out bằng toolbar hoặc bánh xe, vùng lọc điểm mở rộng theo hai trục đang nhìn, tối đa 3 lần kích thước box và thêm không quá 3 m mỗi phía so với vùng gốc. Trục chiều sâu giữ hệ số 1.10. Điểm ngoài box có độ đậm 75% và kích thước tối thiểu 1.5 px; điểm trong box giữ nguyên độ đậm và kích thước đã chọn. Trong lúc zoom dùng lại điểm đã lọc; khi dừng zoom sẽ cập nhật vùng điểm từ PCD trong RAM. Thao tác zoom không gọi tải frame/PCD mới.
 
 6. **Nhảy Nhanh Đến Frame (Click to Jump Frame)**:
-   - Bấm vào nút `[ ↗ Nhảy / Jump ]` trên bất kỳ thẻ frame nào, hoặc bấm trực tiếp vào thanh tiêu đề của frame đó để CVAT tự động đồng bộ player chuyển tới frame đó.
+   - Bấm trực tiếp vào thanh tiêu đề của card để chuyển player tới frame đó. Các nút Active, Căn nền, Cố định All và Nhảy/Jump đã được bỏ khỏi UI; căn nền và đồng bộ kích thước vẫn có thể dùng qua phím tắt.
 
 ---
 
@@ -66,7 +67,7 @@ Bộ phím tích hợp tự chạy cùng Inspector trên các địa chỉ trong
 
 Trong panel Inspector: đặt con trỏ lên thẻ frame cần sửa ở các ô Top/Side/Front, hoặc bấm trực tiếp vào thẻ/canvas rồi nhấn phím. Phím chỉnh đúng frame của thẻ đó (kể cả frame khác khung CVAT chính), cập nhật cả ba góc nhìn và lưu qua cơ chế chỉnh sửa sẵn có của repo. **Không cần chọn lại box trên CVAT chính.** G/Shift+G đồng bộ/khôi phục kích thước theo box trên thẻ đang chọn; P/Shift+P thao tác Outside của track trong panel. Alt+T vẫn chỉnh bố cục CVAT chính. Bộ tự bật thay thế handler cũ nếu handler đó chưa kết nối với Inspector.
 
-W và E đã hoán đổi chức năng: **Q/W** xoay trái/phải 2° quanh trục Z của point cloud; **E/R** xoay trái/phải 2° trong mặt Side quanh trục Y cục bộ.
+Phím xoay dùng cùng bước, chiều và trục cục bộ như nút trên view: **Q/W** tương ứng Top ↺/↻ 3°; **E/R** tương ứng Side ↺/↻ 1°; **Numpad 5/4** tương ứng Front ↺/↻ 1°. Kết quả khớp cả khi box đã nghiêng.
 
 | Phím | Chức năng |
 | --- | --- |
@@ -77,9 +78,9 @@ W và E đã hoán đổi chức năng: **Q/W** xoay trái/phải 2° quanh tr�
 | Shift + → | Thu mặt phía → vào 6 cm, giữ nguyên mặt phía ← |
 | Shift + ↑ / ↓ | Nới mặt trên ra / thu mặt dưới vào 6 cm, giữ nguyên mặt đối diện |
 | Shift + Numpad 1 / 2 | Nới mặt phải ra / thu mặt trái vào 6 cm, giữ nguyên mặt đối diện |
-| Numpad 4 / 5 | Nghiêng ngang phải / trái 3° quanh trục X cục bộ |
+| Numpad 4 / 5 | Front ↻ / ↺ 1° quanh trục X cục bộ |
 | Shift + R | Căn cao độ, Roll và Pitch của box đang chọn theo mặt đường |
-| Z | Xoay trái 90° quanh trục Z của point cloud |
+| Z | Top ↺ 90° quanh trục Z cục bộ, giống nút UI |
 | X | Xoay 90° quanh Z cục bộ và đổi Dài/Rộng, giữ nguyên vùng box |
 | 1 / 2 / 3 / 4 (hàng trên) | Mẫu Sedan / SUV / xe máy / người đi bộ |
 | G / Shift + G | Đồng bộ kích thước các keyframe cùng track trong job / khôi phục lần đồng bộ gần nhất |
@@ -96,13 +97,25 @@ Thay đổi đi qua cơ chế chỉnh sửa và lịch sử của CVAT; dùng Un
 
 ### Căn box theo mặt đường
 
-Chọn đúng một cuboid trên canvas CVAT của frame hiện tại, rồi nhấn **Shift+R** hoặc nút **⛰ Căn nền** trên toolbar. Công cụ giữ nguyên X/Y, kích thước, hướng đầu xe, ID và trạng thái annotation; chỉ tính lại Z, Roll và Pitch theo mặt đường. Kết quả đi qua `canvas.updatePosition`, vì vậy Undo/Redo chuẩn của CVAT vẫn hoạt động.
+Trỏ vào card cần chỉnh rồi nhấn **Shift+R** để căn nền bằng PCD cache của đúng frame. Khi thao tác trên canvas CVAT chính, chọn đúng một cuboid trước khi nhấn phím. Công cụ giữ nguyên X/Y, kích thước, hướng đầu xe, ID và trạng thái annotation; tính lại cao độ và độ nghiêng theo mặt đường.
 
 Thuật toán chỉ đọc PCD của frame hiện tại đã được CVAT tải vào RAM. Nó không gọi `fetch`, API frame hoặc request mạng bổ sung. Mặt nền được ước lượng theo các ô không gian quanh đáy box, loại điểm thân xe/vật cản, kiểm tra độ phủ đáy, độ liên tục, sai số và giới hạn độ nghiêng. Nếu dữ liệu mơ hồ, thiếu điểm hoặc độ dịch cao quá giới hạn an toàn, box được giữ nguyên và lỗi xuất hiện ở nút/Console.
 
 Trong **? → Cấu hình phím**, có thể đổi phím `Căn box theo mặt đường` và bật **Tự căn khi chọn box trên canvas CVAT**. Tự căn chỉ được lưu trong tab/phiên hiện tại để tránh thay đổi ngoài ý muốn ở phiên sau. Chức năng này không căn card của frame khác trong Inspector vì các frame đó không phải PCD đang tải trên canvas CVAT chính.
 
 Sau khi cập nhật: Reload tiện ích trong `chrome://extensions`, rồi tải lại tab CVAT. Tắt tiện ích hotkey cũ nếu còn bật riêng để tránh hai bộ phím chạy cùng lúc.
+
+## Cập nhật thuộc tính hàng loạt
+
+Tìm Object ID trong Inspector, bấm **Thuộc tính**, chọn attribute và giá trị mới. Phạm vi gồm **Toàn track** hoặc **Khoảng frame**; mỗi lần sửa một attribute của track đang mở. Chưa hỗ trợ nhiều ID trong cùng một batch.
+
+Thuộc tính cố định chỉ áp dụng toàn track. Thuộc tính thay đổi theo frame chỉ cập nhật keyframe hiện có trong khoảng, kể cả keyframe Outside nhưng không đổi trạng thái Outside. Không tạo keyframe tại đầu/cuối khoảng. CVAT kế thừa giá trị sang các frame sau cho đến mốc đổi thuộc tính tiếp theo, nên giá trị có thể tiếp tục sau cuối khoảng chọn. Khoảng không có keyframe sẽ không được áp dụng. Giá trị input được kiểm tra theo định nghĩa label: select/radio, checkbox, number và text.
+
+Bấm **Xem trước** để xem giá trị cũ/mới, sau đó **Áp dụng** mới ghi vào annotation trong bộ nhớ CVAT. Không có thao tác tải PCD, đổi bộ lọc hoặc tự nhảy frame trong batch. Chỉ gán attribute cần sửa; không gán hình học box và không thêm keyframe. Lịch sử Undo chuẩn của CVAT được sử dụng; có thể cần nhiều bước Undo cho một batch. Bấm Save trong CVAT để lưu, hoặc theo cấu hình Autosave của CVAT.
+
+Nếu annotation/track/job thay đổi sau khi xem trước, cần xem trước lại. Track bị khóa hoặc ground truth không được sửa. Nếu ghi lỗi giữa chừng, hộp thoại báo số bước đã ghi; dùng Undo CVAT để hoàn tác phần đã áp dụng.
+
+Kiểm thử chuyên biệt: `tests/fixtures/attribute_batch.html`.
 
 ## Cập nhật và kiểm tra
 
@@ -125,8 +138,9 @@ Sau khi sửa mã nguồn:
 3. Nút pill `[ ⏻ 3D ]` nằm khiêm tốn ở góc dưới bên phải màn hình:
    - Bấm `[ ⏻ 3D ]` hoặc nhấn **`Alt + Q`** để bật drawer kiểm định.
    - Nhấn **`Alt + Q`** hoặc nút `[ ⏻ UI ]` trên toolbar để tắt nhanh giao diện.
-4. Khi click chọn một track / cuboid bất kỳ trên CVAT:
-   - Panel sẽ nạp và hiển thị toàn bộ chuỗi frame của vật thể đó (hơn 60 frames) theo dạng cuộn dọc.
+4. Nhập Object ID trong ô tìm kiếm của Inspector, rồi bấm **Lọc** hoặc **Enter**:
+   - Panel nạp chuỗi frame của đúng ID đã tìm. Click object trên CVAT hoặc mở lại UI không tự chọn/nạp object vào Inspector.
+   - Bỏ chọn object hoặc chuyển qua đoạn Outside không xóa track đang kiểm tra. Chỉ tìm ID khác mới đổi object trong Inspector; đổi job sẽ xóa track cũ.
    - Mỗi frame hiển thị đầy đủ 3 góc chiếu Top, Front, Side kèm góc quay `Yaw: XX.X°` và kích thước.
 5. Để chỉnh sửa một frame:
    - Bấm nút **`[ ✎ Sửa / Edit ]`** trên thẻ frame đó.

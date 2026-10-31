@@ -4,7 +4,8 @@
 /* Isolated CSS Variables & Dark Theme strictly scoped to Extension UI only */
 /* Will never affect or override CVAT page styles, light theme, or native controls */
 .cvat-qaqc-dock,
-.cvat-qaqc-trigger {
+.cvat-qaqc-trigger,
+.cvat-qaqc-attribute-overlay {
   color-scheme: dark;
   --macos-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", sans-serif;
   --macos-bg-glass: rgba(28, 28, 30, 0.82);
@@ -371,6 +372,100 @@
   color: #FFFFFF;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 }
+
+/* Errors remain visible even when the Inspector drawer is closed. */
+.cvat-qaqc-notifications {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 2147483647;
+  width: min(340px, calc(100vw - 32px));
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+  font: 12px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif;
+}
+
+.cvat-qaqc-notification {
+  pointer-events: auto;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #f5f5f7;
+  background: rgba(38, 30, 29, 0.96);
+  border: 1px solid rgba(255, 159, 10, 0.55);
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(16px);
+}
+
+.cvat-qaqc-notification p { flex: 1; margin: 0; overflow-wrap: anywhere; }
+.cvat-qaqc-notification button {
+  min-height: 26px;
+  min-width: 26px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  color: inherit;
+  background: transparent;
+  font-family: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.cvat-qaqc-notification button:hover { background: rgba(128, 128, 128, 0.18); }
+.cvat-qaqc-notification button:focus-visible { outline: 3px solid #0a84ff; outline-offset: 2px; }
+@media (prefers-color-scheme: light) {
+  .cvat-qaqc-notification { color: #272321; background: rgba(255, 249, 240, 0.97); }
+}
+
+.cvat-qaqc-help-overlay.cvat-qaqc-attribute-overlay {
+  position: fixed; inset: 0; z-index: 2147483646; padding: 20px; box-sizing: border-box;
+}
+.cvat-qaqc-help-panel.cvat-qaqc-attribute-panel { width: min(560px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); font-size: 13px; }
+.cvat-qaqc-attribute-panel .cvat-qaqc-help-header { align-items: center; flex-shrink: 0; }
+.cvat-qaqc-help-body.cvat-qaqc-attribute-body { display: block; min-height: 0; padding: 16px 18px; }
+.cvat-qaqc-attribute-fields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px; }
+.cvat-qaqc-attribute-scope { grid-column: 1 / -1; }
+.cvat-qaqc-attribute-field { display: grid; gap: 5px; color: var(--help-secondary); font-size: 12px; }
+.cvat-qaqc-attribute-field input,
+.cvat-qaqc-attribute-field select {
+  box-sizing: border-box;
+  width: 100%; min-width: 0; height: 28px; padding: 3px 8px;
+  border: 1px solid var(--help-border); border-radius: 6px;
+  background: var(--help-section); color: var(--help-text); font: 400 13px var(--macos-font);
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.cvat-qaqc-attribute-field select option { background: #29292c; color: #fff; }
+.cvat-qaqc-attribute-field :is(input, select):hover:not(:disabled) { background: var(--help-section-hover); }
+.cvat-qaqc-attribute-field :disabled { opacity: 0.4; cursor: default; }
+.cvat-qaqc-attribute-field input:focus-visible,
+.cvat-qaqc-attribute-field select:focus-visible { outline: 2px solid var(--macos-accent); outline-offset: 2px; }
+.cvat-qaqc-attribute-status { color: var(--help-secondary); font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
+.cvat-qaqc-attribute-body > .cvat-qaqc-attribute-status:last-child { margin-bottom: 0; }
+.cvat-qaqc-attribute-preview { max-height: 220px; overflow: auto; margin: 12px 0; border: 1px solid var(--help-border); border-radius: 7px; }
+.cvat-qaqc-attribute-preview:empty { display: none; }
+.cvat-qaqc-attribute-preview table { width: 100%; border-collapse: collapse; font-size: 12px; color: var(--help-text); font-variant-numeric: tabular-nums; }
+.cvat-qaqc-attribute-preview th,
+.cvat-qaqc-attribute-preview td { height: 28px; box-sizing: border-box; padding: 5px 10px; text-align: left; border-bottom: 1px solid var(--help-separator); overflow-wrap: anywhere; }
+.cvat-qaqc-attribute-preview th { position: sticky; top: 0; background: var(--help-surface); backdrop-filter: blur(20px); color: var(--help-secondary); font-weight: 500; }
+.cvat-qaqc-attribute-preview tr:nth-child(odd) td { background: var(--help-section); }
+.cvat-qaqc-attribute-preview tr:last-child td { border-bottom: 0; }
+.cvat-qaqc-attribute-footer { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; padding: 12px 18px; border-top: 1px solid var(--help-separator); flex-shrink: 0; }
+.cvat-qaqc-attribute-history { margin: 0; font-size: 11px; color: var(--help-secondary); }
+.cvat-qaqc-attribute-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.cvat-qaqc-attribute-button { height: 28px; padding: 0 12px; border-radius: 6px; border: 1px solid var(--help-border); background: var(--help-section); color: var(--help-text); font: 500 13px var(--macos-font); box-shadow: 0 1px 2px rgba(0,0,0,0.08); cursor: pointer; transition: background 120ms ease; }
+.cvat-qaqc-attribute-button:hover:not(:disabled) { background: var(--help-section-hover); }
+.cvat-qaqc-attribute-button:active:not(:disabled) { background: var(--help-separator); }
+.cvat-qaqc-attribute-button.cvat-qaqc-attribute-primary { background: var(--macos-accent); border-color: transparent; color: #fff; }
+.cvat-qaqc-attribute-primary:hover:not(:disabled) { background: var(--macos-accent-hover); }
+.cvat-qaqc-attribute-primary:active:not(:disabled) { background: #005bb5; }
+.cvat-qaqc-attribute-button:focus-visible { outline: 2px solid var(--macos-accent); outline-offset: 2px; }
+.cvat-qaqc-attribute-actions button:disabled { opacity: 0.4; cursor: default; }
+@media (prefers-color-scheme: light) { .cvat-qaqc-attribute-field select option { background: #fff; color: #1c1c1e; } }
+@media (max-width: 500px) { .cvat-qaqc-attribute-fields { grid-template-columns: 1fr; } }
 
 /* macOS Standard Buttons */
 .cvat-qaqc-btn {

@@ -1,8 +1,8 @@
-/* Z: xoay cả box trái 90° quanh tâm, trục Z của point cloud.
- * Q/W: xoay cả box trái/phải 2° quanh tâm, trục Z của point cloud.
- * E/R: xoay trái/phải 2° trong mặt Side, quanh trục Y cục bộ của box.
+/* Z: xoay ↺ 90° trên Top, cùng trục cục bộ và chiều với nút UI.
+ * Q/W: xoay ↺/↻ 3° trên Top.
+ * E/R: xoay ↺/↻ 1° trên Side.
  * ←/→: tiến/lùi 4 cm theo hướng box trên mặt ngang. ↑/↓: nâng/hạ 4 cm.
- * Numpad 1/2: qua phải/trái 4 cm. Numpad 4/5: nghiêng ngang phải/trái 3°.
+ * Numpad 1/2: qua phải/trái 4 cm. Numpad 4/5: xoay Front ↻/↺ 1°.
  * Shift+←/→, ↑/↓, Numpad 1/2: nới/thu đúng một mặt 6 cm, giữ mặt đối diện.
  * X: đổi hướng trái 90° quanh trục Z cục bộ + đổi Dài/Rộng,
  *    giữ nguyên vùng không gian mà box chiếm.
@@ -27,7 +27,6 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             '3': { name: 'Xe máy', size: [1.85, 0.8, 1.5] },
             '4': { name: 'Người đi bộ', size: [0.6, 0.6, 1.7] },
         },
-        leftSign: 1, // Chiều trái nhìn từ +Z xuống XY. Đổi thành -1 nếu cần đảo chiều.
         moveStep: 0.04, // Cùng đơn vị point cloud: 0.04 m = 4 cm.
         resizeStep: 0.06, // Mặt được chỉnh dịch 6 cm, mặt đối diện đứng yên.
     };
@@ -70,9 +69,11 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
         }
     }
 
-    function report(message, error = false) {
+    function report(message, error = false, title) {
         if (stopped) return;
-        (error ? console.warn : console.info)(`[CVAT 3D] ${message}`);
+        // Handled operation failures are shown in the UI, not Chrome extension Errors.
+        console.info(`[CVAT 3D] ${message}`);
+        if (error) global.CVATQAQC.Notifications?.showError(message, { title });
     }
 
     function selectedObjects(canvas) {
@@ -594,26 +595,15 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             points.splice(6, 3, ...preset.size);
             description = `${preset.name}: ${preset.size.join(' × ')} (Dài × Rộng × Cao)`;
         } else {
-            const sideRotation = item.key === 'e' || item.key === 'r';
-            const rollRotation = item.key === 'roll_right' || item.key === 'roll_left';
-            const degrees = ({ q: 2, w: -2, e: 2, r: -2, roll_right: 3, roll_left: -3 })[item.key] ?? 90;
-            const angle = degrees * Math.PI / 180 * (config.leftSign < 0 ? -1 : 1);
-            const rotation = Math3D.rotateEulerXYZ(points.slice(3, 6), rollRotation ? 0 : sideRotation ? 1 : 2,
-                angle, item.key === 'x' || sideRotation || rollRotation);
+            const { view, degrees } = Math3D.hotkeyRotation(item.key);
+            const rotation = Math3D.rotateLocal({ rx: points[3], ry: points[4], rz: points[5] }, view, degrees * Math.PI / 180);
             if (item.key === 'x') {
                 [points[6], points[7]] = [points[7], points[6]];
                 description = 'X: đổi hướng trái 90°; giữ nguyên vùng box';
-            } else if (sideRotation) {
-                const direction = item.key === 'e' ? 'trái' : 'phải';
-                description = `${item.key.toUpperCase()}: xoay Side sang ${direction} 2°`;
-            } else if (rollRotation) {
-                description = item.key === 'roll_right' ? 'Numpad 4: nghiêng ngang sang phải 3°' :
-                    'Numpad 5: nghiêng ngang sang trái 3°';
             } else {
-                const direction = degrees < 0 ? 'phải' : 'trái';
-                description = `${item.key.toUpperCase()}: xoay cả box ${direction} ${Math.abs(degrees)}°`;
+                description = `${view.toUpperCase()}: xoay ${degrees < 0 ? '↺' : '↻'} ${Math.abs(degrees)}°`;
             }
-            points.splice(3, 3, ...rotation);
+            points.splice(3, 3, rotation.rx, rotation.ry, rotation.rz);
         }
         if (samePoints(state.points, points)) return report('Box đã có kích thước này.');
 
@@ -651,6 +641,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
                     const result = await apply(item);
                     item.resolve?.(result);
                 } catch (error) {
+                    if (item.key === 'ground') error.notificationTitle = 'Không thể căn nền bằng RANSAC';
                     item.reject?.(error);
                     throw error;
                 }
@@ -661,7 +652,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
                 console.debug(`[CVAT 3D] ${error.message}`);
                 return;
             }
-            report(error.message, true);
+            report(error.message, true, error.notificationTitle);
         } finally {
             running = false;
         }
@@ -726,7 +717,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
             }
             void drain();
         } catch (error) {
-            report(error.message, true);
+            report(error.message, true, key === 'ground' ? 'Không thể căn nền bằng RANSAC' : undefined);
         }
     }
 
@@ -757,7 +748,7 @@ function install3DHotkeys({ getInspectorTarget } = {}) {
         active: () => !stopped,
         context: () => groundContext(),
         request: () => requestGroundFit({ automatic: true }),
-        report,
+        report: (message, error) => report(message, error, 'Không thể tự căn nền bằng RANSAC'),
     }) || null;
 }
 

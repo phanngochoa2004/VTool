@@ -50,6 +50,15 @@ class MacOSDock {
         this.helpBtn = null;
         this.helpPreviousFocus = null;
 
+        const batch = new global.CVATQAQC.AttributeBatch({
+            getJob: () => this.callbacks.getJob?.(),
+            getStore: () => this.callbacks.getStore?.(),
+            getClientID: () => this.state.activeClientID,
+            onBegin: () => this.callbacks.onAttributeBatchBegin?.(),
+            onEnd: (job, id) => this.callbacks.onAttributeBatchEnd?.(job, id),
+        });
+        this.attributeDialog = new global.CVATQAQC.AttributeDialog(batch);
+
         this.initDOM();
         this.setupResizer();
         this.setupKeyboardShortcuts();
@@ -198,11 +207,15 @@ class MacOSDock {
                     if (success !== false) {
                         this.setFilteredObjectID(targetID);
                     } else {
+                        global.CVATQAQC.Notifications?.showError(`Không tìm thấy hoặc không thể nạp Object ID #${targetID}.`,
+                            { title: 'Không thể tìm object' });
                         filterBar.classList.add('error-shake');
                         filterInput.title = `Không tìm thấy Object ID #${targetID}`;
                         setTimeout(() => filterBar.classList.remove('error-shake'), 600);
                     }
                 }
+            } catch (error) {
+                global.CVATQAQC.Notifications?.showError(error, { title: 'Không thể tìm object' });
             } finally {
                 filterBtn.disabled = false;
                 filterBtn.textContent = 'Lọc';
@@ -331,41 +344,11 @@ class MacOSDock {
             this.refreshAllCards();
         });
 
-        // Jump to Active Frame Button
-        const jumpBtn = document.createElement('button');
-        jumpBtn.className = 'cvat-qaqc-btn';
-        jumpBtn.textContent = '🎯 Active';
-        jumpBtn.title = 'Cuộn đến frame đang chọn trong CVAT';
-        jumpBtn.addEventListener('click', () => this.scrollToActiveFrame());
-
-        const groundFitBtn = document.createElement('button');
-        groundFitBtn.className = 'cvat-qaqc-btn cvat-qaqc-ground-fit-btn';
-        groundFitBtn.textContent = '⛰ Căn nền';
-        groundFitBtn.title = 'Căn card đang active theo mặt đường của đúng frame (Shift+R)';
-        groundFitBtn.setAttribute('aria-label', 'Căn box đang chọn theo mặt đường');
-        groundFitBtn.addEventListener('click', async () => {
-            if (groundFitBtn.disabled) return;
-            const original = '⛰ Căn nền';
-            groundFitBtn.disabled = true;
-            groundFitBtn.textContent = 'Đang căn…';
-            try {
-                const result = await this.fitGroundForCard();
-                const heightCm = result.heightChange * 100;
-                groundFitBtn.textContent = `✓ ${heightCm >= 0 ? '+' : ''}${heightCm.toFixed(1)} cm`;
-            } catch (error) {
-                groundFitBtn.textContent = '⚠ Không căn';
-                groundFitBtn.title = error.message;
-                console.warn(`[CVAT 3D] ${error.message}`);
-            } finally {
-                global.setTimeout(() => {
-                    if (!groundFitBtn.isConnected) return;
-                    groundFitBtn.disabled = false;
-                    groundFitBtn.textContent = original;
-                    groundFitBtn.title = 'Căn card đang active theo mặt đường của đúng frame (Shift+R)';
-                }, 1800);
-            }
-        });
-        this.groundFitBtn = groundFitBtn;
+        const attributesBtn = document.createElement('button');
+        attributesBtn.className = 'cvat-qaqc-btn';
+        attributesBtn.textContent = 'Thuộc tính';
+        attributesBtn.title = 'Cập nhật thuộc tính hàng loạt cho track đã tìm';
+        attributesBtn.addEventListener('click', () => this.attributeDialog.open(attributesBtn));
 
         // Keyboard shortcut configuration
         const helpBtn = document.createElement('button');
@@ -391,8 +374,7 @@ class MacOSDock {
         rightGroup.appendChild(sizeSelect);
         rightGroup.appendChild(zoomSelect);
         rightGroup.appendChild(ptSelect);
-        rightGroup.appendChild(jumpBtn);
-        rightGroup.appendChild(groundFitBtn);
+        rightGroup.appendChild(attributesBtn);
         rightGroup.appendChild(helpBtn);
         rightGroup.appendChild(uiToggleBtn);
 
@@ -414,7 +396,7 @@ class MacOSDock {
         emptyTitle.textContent = 'No 3D Object Selected';
         const emptySub = document.createElement('div');
         emptySub.className = 'cvat-qaqc-empty-sub';
-        emptySub.textContent = 'Select any cuboid or track in CVAT to inspect its orthogonal projections across all frames.';
+        emptySub.textContent = 'Nhập Object ID vào ô tìm kiếm rồi bấm Lọc hoặc Enter để nạp các frame vào Inspector.';
         empty.appendChild(emptyTitle);
         empty.appendChild(emptySub);
         this.emptyState = empty;

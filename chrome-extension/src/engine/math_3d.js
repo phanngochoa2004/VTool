@@ -8,6 +8,21 @@
     'use strict';
 
 class Math3D {
+    static rotationStepDegrees(viewType) { return viewType === 'top' ? 3 : 1; }
+
+    /** Shared button/shortcut convention: counter-clockwise is negative. */
+    static hotkeyRotation(key) {
+        const actions = {
+            q: ['top', -1], w: ['top', 1], e: ['side', -1], r: ['side', 1],
+            roll_left: ['front', -1], roll_right: ['front', 1],
+            z: ['top', -90], x: ['top', -90],
+        };
+        const action = actions[key];
+        if (!action) throw new Error('Không tìm thấy lệnh xoay.');
+        const [view, direction] = action;
+        return { view, degrees: Math.abs(direction) === 90 ? direction : direction * this.rotationStepDegrees(view) };
+    }
+
     /** Apply a local or world axis turn without depending on a CVAT Three.js mesh. */
     static rotateEulerXYZ(angles, axis, angle, local = true) {
         const [rx, ry, rz] = angles;
@@ -158,7 +173,7 @@ class Math3D {
      * @param {Float32Array|Array<number>} points - world point cloud [x0, y0, z0, (intensity0), x1, y1, z1...]
      * @param {number} stride - 3 (x,y,z) or 4 (x,y,z,i)
      * @param {Object} box - { x, y, z, rx, ry, rz, sx, sy, sz }
-     * @param {number} marginFactor - expansion factor around bounding box (default 1.4)
+     * @param {number|{x:number,y:number,z:number}} marginFactor - expansion factors around bounding box (default 1.4)
      * @returns {Float32Array} local points [lx0, ly0, lz0, (intensity0), ...]
      */
     static transformAndCropPoints(points, stride, box, marginFactor = 1.4) {
@@ -172,9 +187,11 @@ class Math3D {
         const inv10 = R[1], inv11 = R[4], inv12 = R[7];
         const inv20 = R[2], inv21 = R[5], inv22 = R[8];
 
-        const halfX = (sx / 2) * marginFactor;
-        const halfY = (sy / 2) * marginFactor;
-        const halfZ = (sz / 2) * marginFactor;
+        const factors = typeof marginFactor === 'number'
+            ? { x: marginFactor, y: marginFactor, z: marginFactor } : marginFactor;
+        const halfX = (sx / 2) * factors.x;
+        const halfY = (sy / 2) * factors.y;
+        const halfZ = (sz / 2) * factors.z;
 
         const maxPoints = Math.floor(points.length / stride);
         const outBuffer = new Float32Array(maxPoints * 4); // [lx, ly, lz, intensity]
@@ -200,7 +217,8 @@ class Math3D {
             }
         }
 
-        return outBuffer.subarray(0, outCount * 4);
+        // Keep only the ROI allocation in card caches, not a full-frame-sized backing buffer.
+        return outBuffer.slice(0, outCount * 4);
     }
 
     /**

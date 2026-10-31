@@ -34,52 +34,18 @@ const {
 
     let currentTrackFrames = [];
     let currentClientID = null;
+    let inspectorJob = null;
+    let searchEpoch = 0;
     let bulkTrackMutationDepth = 0;
     let editEpoch = 0;
     let historyRefreshEpoch = 0;
 
     const dock = new MacOSDock({
-        onBeforeOpen: async () => {
-            // Khi nhấn bật UI extension, thực hiện filter object ID đúng ID đó TRƯỚC KHI xử lý các tác vụ khác
-            let clientID = hook.activeClientID || currentClientID || (hook.store ? hook.findActiveClientID(hook.store.getState()) : null);
-
-            // Fallback auto-detection: Nếu chưa chọn track nào, tự động lấy track 3D cuboid đầu tiên trên frame hiện tại
-            if ((clientID === null || typeof clientID === 'undefined') && hook.jobInstance) {
-                try {
-                    const states = await hook.jobInstance.annotations.get(hook.currentFrame, true, []);
-                    const cuboid = states.find(s => s.shapeType === 'cuboid' || (s.points && s.points.length >= 9));
-                    if (cuboid && typeof cuboid.clientID === 'number') {
-                        clientID = cuboid.clientID;
-                        hook.activeClientID = clientID;
-                        currentClientID = clientID;
-                    }
-                } catch (_) {}
-            }
-
-            if (clientID !== null && typeof clientID !== 'undefined') {
-                console.log(`[CVAT-QAQC] UI Extension opened. Filtering workspace to Object ID #${clientID} FIRST...`);
-                await hook.filterByObjectID(clientID);
-                dock.setFilteredObjectID(clientID);
-
-                // Nạp frames cho track này nếu chưa nạp
-                if (hook.jobInstance && (currentClientID !== clientID || currentTrackFrames.length === 0)) {
-                    try {
-                        currentClientID = clientID;
-                        currentTrackFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
-                        dock.updateTrack(clientID, currentTrackFrames, hook.currentFrame, pcdCache);
-                        const frameNumbers = currentTrackFrames.map(f => f.frame);
-                        pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
-                            dock.updateCardPointCloud(loadedFrame, pts);
-                        });
-                    } catch (err) {
-                        console.warn('[CVAT-QAQC] Error loading track frames in onBeforeOpen:', err);
-                    }
-                }
-            }
-        },
-        onOpen: () => hook.refreshActiveObject(),
         onFilterObject: async (id) => {
             if (!hook.jobInstance) return false;
+            const job = hook.jobInstance;
+            const operation = ++searchEpoch;
+            historyRefreshEpoch++;
             const targetID = Number(id);
             if (isNaN(targetID)) return false;
 
@@ -87,12 +53,14 @@ const {
 
             // 1. Isolate in CVAT (Three.js and Redux)
             await hook.filterByObjectID(targetID);
-            dock.setFilteredObjectID(targetID);
+            if (operation !== searchEpoch || hook.jobInstance !== job) return false;
 
             // 2. Load track frames for this ID
             try {
-                const trackFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
+                const trackFrames = await TrackReader.getTrackFrames(targetID, job);
+                if (operation !== searchEpoch || hook.jobInstance !== job) return false;
                 if (trackFrames && trackFrames.length > 0) {
+                    inspectorJob = job;
                     currentClientID = targetID;
                     currentTrackFrames = trackFrames;
 
@@ -104,8 +72,10 @@ const {
                     }
 
                     dock.updateTrack(targetID, trackFrames, targetFrame, pcdCache);
+                    dock.setFilteredObjectID(targetID);
                     const frameNumbers = trackFrames.map(f => f.frame);
-                    pcdCache.preloadTrackFrames(frameNumbers, hook.jobInstance, (loadedFrame, pts) => {
+                    pcdCache.preloadTrackFrames(frameNumbers, job, (loadedFrame, pts) => {
+                        if (operation !== searchEpoch || inspectorJob !== job || currentClientID !== targetID) return;
                         dock.updateCardPointCloud(loadedFrame, pts);
                     });
                     return true;
@@ -127,6 +97,22 @@ const {
         onRedo: () => hook.redo(),
         getJob: () => hook.jobInstance,
         getStore: () => hook.store,
+        onAttributeBatchBegin: () => { bulkTrackMutationDepth++; historyRefreshEpoch++; },
+        onAttributeBatchEnd: async (job, id) => {
+            bulkTrackMutationDepth--;
+            historyRefreshEpoch++;
+            if (hook.jobInstance !== job || currentClientID !== id) return;
+            // Refresh only current Redux entries/history; keep player, filter and card layout intact.
+            const annotation = hook.store?.getState()?.annotation;
+            const frame = annotation?.player?.frame?.number;
+            if (!Number.isInteger(frame)) return;
+            const visibleIDs = new Set((annotation.annotations?.states || []).map((state) => state.clientID));
+            const states = await job.annotations.get(frame, true, []);
+            const history = await job.actions.get();
+            if (hook.jobInstance !== job || hook.currentFrame !== frame || currentClientID !== id) return;
+            hook.store.dispatch({ type: 'UPDATE_ANNOTATIONS_SUCCESS',
+                payload: { states: states.filter((state) => visibleIDs.has(state.clientID)), history } });
+        },
         onRefreshTrack: async (clientID) => {
             if (!hook.jobInstance || dock.state.activeClientID !== clientID) return;
             currentTrackFrames = await TrackReader.getTrackFrames(clientID, hook.jobInstance);
@@ -170,6 +156,8 @@ const {
                 currentTrackFrames = previousFrames;
                 dock.refreshTrackData(previousFrames);
             }
+            global.CVATQAQC.Notifications?.showError('CVAT chưa xác nhận được thay đổi của box. Hãy kiểm tra lại trước khi thử tiếp.',
+                { title: 'Không thể cập nhật box', context: `Object #${clientID}, frame ${frame}` });
             return false;
         },
         onUpdateOutside: async (frame, clientID, outside) => {
@@ -183,7 +171,9 @@ const {
             }
 
             // Persist to CVAT in-memory AnnotationsCollection and sync Redux
-            await hook.updateObjectOutside(frame, clientID, outside);
+            const saved = await hook.updateObjectOutside(frame, clientID, outside);
+            if (saved === false) global.CVATQAQC.Notifications?.showError('CVAT chưa cập nhật được trạng thái Outside.',
+                { title: 'Không thể đổi Outside', context: `Object #${clientID}, frame ${frame}` });
         },
         onApplySizeToTrack: async (clientID, sizeObj) => {
             bulkTrackMutationDepth++;
@@ -217,41 +207,18 @@ const {
 
     start3DHotkeysAutostart({ getInspectorTarget: (event) => dock.getHotkeyTarget(event) });
 
-    // Listen for object selection change (track or shape)
-    hook.on('objectChange', async ({ clientID, job, canvas, frame }) => {
-        currentClientID = clientID;
-
-        if (canvas) {
-            pcdCache.captureFromThreeScene(frame, canvas);
-        }
-
-        if (clientID === null) {
+    // CVAT selection does not select an Inspector track. Only explicit ID search does.
+    // Clear the old Inspector only when its owning job has actually changed.
+    hook.on('objectChange', ({ job }) => {
+        if (inspectorJob && job !== inspectorJob) {
+            searchEpoch++;
+            historyRefreshEpoch++;
+            inspectorJob = null;
+            currentClientID = null;
             currentTrackFrames = [];
-            dock.updateTrack(null, [], frame, pcdCache);
+            pcdCache.clear();
+            dock.updateTrack(null, [], hook.currentFrame, pcdCache);
             dock.setFilteredObjectID(null);
-            return;
-        }
-
-        // Nếu Dock đang mở và người dùng click vào track mới, tự động lọc ngay sang track ID mới này
-        if (dock.isOpen) {
-            console.log(`[CVAT-QAQC] Dock is active. Auto-filtering workspace to newly clicked Track #${clientID}...`);
-            await hook.filterByObjectID(clientID);
-            dock.setFilteredObjectID(clientID);
-        }
-
-        console.log(`[CVAT-QAQC] Selected Object / Track #${clientID}. Extracting all frames in-memory...`);
-        try {
-            currentTrackFrames = await TrackReader.getTrackFrames(clientID, job);
-            console.log(`[CVAT-QAQC] Found ${currentTrackFrames.length} frames for Track #${clientID}`);
-            dock.updateTrack(clientID, currentTrackFrames, frame, pcdCache);
-
-            // Immediately preload and decode point clouds across all frames of the track upfront!
-            const frameNumbers = currentTrackFrames.map(f => f.frame);
-            pcdCache.preloadTrackFrames(frameNumbers, job, (loadedFrame, pts) => {
-                dock.updateCardPointCloud(loadedFrame, pts);
-            });
-        } catch (err) {
-            console.error('[CVAT-QAQC] Error extracting track frames:', err);
         }
     });
 
@@ -295,14 +262,16 @@ const {
     });
 
     // Listen for CVAT undo/redo or annotation history changes
-    hook.on('historyChange', async ({ clientID, frame }) => {
+    hook.on('historyChange', async () => {
         if (bulkTrackMutationDepth > 0) return;
         const refreshOperation = ++historyRefreshEpoch;
-        const targetID = clientID || currentClientID;
-        if (targetID !== null && hook.jobInstance) {
+        const targetID = currentClientID;
+        const job = inspectorJob;
+        if (targetID !== null && job && hook.jobInstance === job) {
             try {
-                const refreshedFrames = await TrackReader.getTrackFrames(targetID, hook.jobInstance);
-                if (refreshOperation !== historyRefreshEpoch || bulkTrackMutationDepth > 0) return;
+                const refreshedFrames = await TrackReader.getTrackFrames(targetID, job);
+                if (refreshOperation !== historyRefreshEpoch || bulkTrackMutationDepth > 0 ||
+                    currentClientID !== targetID || hook.jobInstance !== job || inspectorJob !== job) return;
                 currentTrackFrames = refreshedFrames;
                 dock.refreshTrackData(refreshedFrames);
             } catch (err) {

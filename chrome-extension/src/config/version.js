@@ -2,6 +2,6 @@
     'use strict';
 
     global.CVATQAQC = global.CVATQAQC || {};
-    global.CVATQAQC.version = '1.4.0';
+    global.CVATQAQC.version = '1.5.2';
     global.__CVAT_QAQC_BUILD_VERSION__ = global.CVATQAQC.version;
 })(window);

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="vi">
+<meta charset="utf-8">
+<title>Zoom context point-cloud tests</title>
+<style>body{background:#161719;color:#eee;font:14px system-ui}canvas{border:1px solid #555}</style>
+<h1>Zoom context</h1>
+<pre id="result">Running…</pre>
+<canvas id="view" width="400" height="260" style="width:400px;height:260px"></canvas>
+<script src="../../src/config/version.js"></script>
+<script src="../../src/engine/math_3d.js"></script>
+<script src="../../src/engine/ortho_canvas.js"></script>
+<script src="../../src/ui/frame_card.js"></script>
+<script>
+try {
+    const { FrameCard, Math3D, OrthoCanvasRenderer } = CVATQAQC;
+    const assert = (value, message) => { if (!value) throw new Error(message); };
+    const box = {x:0,y:0,z:0,rx:0,ry:0,rz:0,sx:2,sy:2,sz:2};
+    const top = FrameCard.pointCropFactors(box, 'top', 0.725);
+    assert(top.x === 2 && top.y === 2 && top.z === 1.1, 'Top expands XY, keeps depth narrow');
+    const side = FrameCard.pointCropFactors(box, 'side', 0.725);
+    assert(side.x === 2 && side.z === 2 && side.y === 1.1, 'Side expands XZ');
+    const front = FrameCard.pointCropFactors(box, 'front', 0.725);
+    assert(front.y === 2 && front.z === 2 && front.x === 1.1, 'Front expands YZ');
+    assert(FrameCard.pointCropFactors(box, 'top', 100).x === 1.45, 'Zoom in retains base ROI');
+    assert(FrameCard.pointCropFactors(box, 'top', 0.01).x === 3, 'Expansion capped at 3x');
+    const truck = {...box,sx:20};
+    assert((FrameCard.pointCropFactors(truck, 'top', 0.01).x - 1.45)*truck.sx/2 <= 3.000001,
+        'Additional margin capped at 3m per side');
+    const cloud = new Float32Array([0,0,0, 1.5,0,0, 0,0,1.5, 5,0,0]);
+    const base = Math3D.transformAndCropPoints(cloud,3,box,1.1);
+    const expanded = Math3D.transformAndCropPoints(cloud,3,box,top);
+    assert(base.length === 4 && expanded.length === 8, 'Zoom out reveals context but excludes depth clutter and far points');
+    assert(expanded.buffer.byteLength === expanded.byteLength, 'Card cache owns only cropped buffer');
+    const rotated = {...box,rz:Math.PI/2};
+    assert(Math3D.transformAndCropPoints(new Float32Array([0,1.5,0]),3,rotated,top).length === 4,
+        'ROI uses box-local coordinates after rotation');
+    const canvas = document.querySelector('#view');
+    const context = canvas.getContext('2d');
+    const fill = context.fill.bind(context);
+    const alphas = [];
+    const rect = context.rect.bind(context);
+    const pointRects = [];
+    context.rect = (...args) => { pointRects.push(args); return rect(...args); };
+    context.fill = (...args) => { alphas.push(context.globalAlpha); return fill(...args); };
+    OrthoCanvasRenderer.render(canvas, expanded, box, 'top', {
+        zoom:0.725, pointCropFactors:top, contextOpacity:0.75, pointSize:1, contextPointSize:1.5,
+    });
+    assert(alphas.some((a) => Math.abs(a-0.75)<0.001) && alphas.includes(1), 'Context visible, box points bright');
+    assert(pointRects.some((r) => r[2] === 1.5) && pointRects.some((r) => r[2] === 1), 'Outside points enlarged without changing inside point size');
+    const metrics = OrthoCanvasRenderer.getMetrics(canvas, box, 'top', {marginFactor:1.45});
+    assert(metrics.boxLeft >= 50 && metrics.boxTop >= 40, 'Room around box at 100%');
+    assert(context.globalAlpha === 1, 'Opacity restored after point rendering');
+    document.querySelector('#result').textContent = 'PASS: expanded ROI, all views, bounds, depth clipping, rotated box, compact cache, context opacity.';
+} catch(error) { document.querySelector('#result').textContent = 'FAIL: '+error.stack; }
+</script>
+</html>

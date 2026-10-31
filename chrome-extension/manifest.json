@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CVAT 3D Multi-Frame QA/QC Inspector",
-  "version": "1.4.0",
+  "version": "1.5.2",
   "description": "CVAT 3D multi-frame QA/QC inspector with cuboid hotkeys, track tools and road-surface fitting without server requests.",
   "permissions": [
     "activeTab"
@@ -27,9 +27,12 @@
         "src/core/hotkey_preferences.js",
         "src/core/workspace_layout.js",
         "src/core/ground_fit.js",
+        "src/core/attribute_batch.js",
+        "src/ui/notifications.js",
         "src/core/hotkeys.js",
         "src/core/hotkeys_autostart.js",
         "src/ui/frame_card.js",
+        "src/ui/attribute_dialog.js",
         "src/ui/macos_dock.js",
         "content/injector.js"
       ],
