@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CVAT 3D Multi-Frame QA/QC Inspector",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "CVAT 3D multi-frame QA/QC inspector with cuboid hotkeys, track tools and road-surface fitting without server requests.",
   "permissions": [
     "activeTab"

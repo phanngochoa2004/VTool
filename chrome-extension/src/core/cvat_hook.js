@@ -16,6 +16,7 @@ class CVATHook {
         this.canvasInstance = null;
         this.activeClientID = null;
         this.activeFilterID = null;
+        this.activeFilterIDs = [];
         this.currentFrame = 0;
         this.listeners = {
             objectChange: [],
@@ -447,9 +448,9 @@ class CVATHook {
                 setTimeout(async () => {
                     try {
                         const history = await this.jobInstance.actions.get();
-                        const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                        const filter = this.getObjectFilters();
                         const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
-                        const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                        const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => this.getFilterIDs().includes(s.clientID)) : freshStates;
                         this.store.dispatch({
                             type: 'UPDATE_ANNOTATIONS_SUCCESS',
                             payload: {
@@ -509,9 +510,9 @@ class CVATHook {
             if (this.store && this.jobInstance?.actions) {
                 try {
                     const history = await this.jobInstance.actions.get();
-                    const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                    const filter = this.getObjectFilters();
                     const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
-                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                    const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => this.getFilterIDs().includes(s.clientID)) : freshStates;
                     this.store.dispatch({
                         type: 'UPDATE_ANNOTATIONS_SUCCESS',
                         payload: {
@@ -619,9 +620,9 @@ class CVATHook {
                 setTimeout(async () => {
                     try {
                         const history = await this.jobInstance.actions.get();
-                        const filter = this.activeFilterID !== null ? [{ and: [{ '==': [{ 'var': 'objectID' }, this.activeFilterID] }] }, {}] : [];
+                        const filter = this.getObjectFilters();
                         const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, filter);
-                        const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => s.clientID === this.activeFilterID) : freshStates;
+                        const statesToPush = this.activeFilterID !== null ? freshStates.filter(s => this.getFilterIDs().includes(s.clientID)) : freshStates;
                         this.store.dispatch({
                             type: 'UPDATE_ANNOTATIONS_SUCCESS',
                             payload: { states: statesToPush, history }
@@ -690,28 +691,33 @@ class CVATHook {
      * @param {number} clientID
      * @returns {Promise<boolean>}
      */
+    getFilterIDs() {
+        if (this.activeFilterID === null) return [];
+        return this.activeFilterIDs?.includes(this.activeFilterID) ? this.activeFilterIDs : [this.activeFilterID];
+    }
+
+    getObjectFilters() {
+        const ids = this.getFilterIDs();
+        if (!ids.length) return [];
+        const conditions = ids.map((id) => ({ '==': [{ var: 'objectID' }, id] }));
+        return [{ and: ids.length === 1 ? conditions : [{ or: conditions }] }, {}];
+    }
+
     async filterByObjectID(clientID) {
-        if (clientID === null || typeof clientID === 'undefined') {
-            return this.clearFilter();
-        }
+        return clientID == null ? this.clearFilter() : this.filterByObjectIDs([clientID]);
+    }
 
-        const targetID = Number(clientID);
-        if (isNaN(targetID)) return false;
-
-        console.log(`[CVAT-QAQC] Filtering workspace to Object ID #${targetID} (isolating track)...`);
+    async filterByObjectIDs(clientIDs) {
+        if (!Array.isArray(clientIDs)) return false;
+        const targetIDs = [...new Set(clientIDs.map(Number))];
+        if (!targetIDs.length) return this.clearFilter();
+        if (!targetIDs.every((id) => Number.isInteger(id) && id >= 0)) return false;
+        const targetID = targetIDs[0];
         this.activeFilterID = targetID;
-
-        // 1. Ensure CVAT filter modal is closed
+        this.activeFilterIDs = targetIDs;
         this.closeFilterModalIfOpen();
-
-        // 2. Build CVAT native JsonLogic filter for objectID wrapped in root 'and' group
-        // react-awesome-query-builder and CVAT annotationsFilter require the root 'and' group structure
-        const filterLogic = {
-            and: [
-                { '==': [{ var: 'objectID' }, targetID] }
-            ]
-        };
-        const filters = [filterLogic, {}];
+        const filters = this.getObjectFilters();
+        const filterLogic = filters[0];
 
         // 3. Dispatch CHANGE_ANNOTATIONS_FILTERS to CVAT Redux store
         if (this.store) {
@@ -738,20 +744,21 @@ class CVATHook {
                 } catch (e) {
                     console.warn('[CVAT-QAQC] annotations.get with filters error, fallback to client-side filter:', e);
                     const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
-                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                    filteredStates = allStates.filter(s => targetIDs.includes(s.clientID));
                 }
 
                 if (!Array.isArray(filteredStates) || filteredStates.length === 0) {
                     const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
-                    filteredStates = allStates.filter(s => s.clientID === targetID);
+                    filteredStates = allStates.filter(s => targetIDs.includes(s.clientID));
                 }
 
+                filteredStates = filteredStates.filter((state) => targetIDs.includes(state.clientID));
                 // Hide all other states in-memory so Three.js drops draw calls immediately
                 try {
                     const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
                     for (const s of allStates) {
                         if (typeof s.hidden !== 'undefined') {
-                            s.hidden = (s.clientID !== targetID);
+                            s.hidden = (!targetIDs.includes(s.clientID));
                         }
                     }
                 } catch (_) {}
@@ -795,7 +802,7 @@ class CVATHook {
                 let historyList = JSON.parse(historyStr);
                 if (!Array.isArray(historyList)) historyList = [];
                 const newEntry = {
-                    id: `qaqc-filter-${targetID}`,
+                    id: `qaqc-filter-${targetIDs.join("-")}`,
                     logic: filterLogic,
                     keypointLogic: {}
                 };
@@ -804,7 +811,7 @@ class CVATHook {
             }
         } catch (_) {}
 
-        this.emit('filterChange', { clientID: targetID });
+        this.emit('filterChange', { clientID: targetID, clientIDs: targetIDs });
         return true;
     }
 
@@ -815,6 +822,7 @@ class CVATHook {
     async clearFilter() {
         console.log('[CVAT-QAQC] Clearing object filter, restoring all objects...');
         this.activeFilterID = null;
+        this.activeFilterIDs = [];
 
         // 1. Ensure modal is closed
         this.closeFilterModalIfOpen();
@@ -838,8 +846,13 @@ class CVATHook {
         let history = null;
         if (this.jobInstance) {
             try {
-                allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
-                history = this.jobInstance.actions ? await this.jobInstance.actions.get() : null;
+                [allStates, history] = await Promise.all([
+                    this.jobInstance.annotations.get(this.currentFrame, true, []),
+                    this.jobInstance.actions ? this.jobInstance.actions.get().catch((error) => {
+                        console.warn('[CVAT-QAQC] Error reading history while clearing filter:', error);
+                        return null;
+                    }) : null,
+                ]);
                 for (const s of allStates) {
                     if (typeof s.hidden !== 'undefined') {
                         s.hidden = false;
@@ -909,7 +922,8 @@ class CVATHook {
             try {
                 const affectedIDs = await this.jobInstance.actions.undo();
                 const history = await this.jobInstance.actions.get();
-                const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                const freshStates = this.activeFilterID !== null ? allStates.filter((state) => this.getFilterIDs().includes(state.clientID)) : allStates;
 
                 if (this.store) {
                     this.store.dispatch({
@@ -976,7 +990,8 @@ class CVATHook {
             try {
                 const affectedIDs = await this.jobInstance.actions.redo();
                 const history = await this.jobInstance.actions.get();
-                const freshStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                const allStates = await this.jobInstance.annotations.get(this.currentFrame, true, []);
+                const freshStates = this.activeFilterID !== null ? allStates.filter((state) => this.getFilterIDs().includes(state.clientID)) : allStates;
 
                 if (this.store) {
                     this.store.dispatch({

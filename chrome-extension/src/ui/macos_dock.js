@@ -28,6 +28,11 @@ class MacOSDock {
             currentFrame: 0,
             framesData: []
         };
+        this.selectedObjectIDs = [];
+        this.objectCatalog = [];
+        this.multipleObjects = false;
+        this.pickerBusy = false;
+        this.catalogEpoch = 0;
         this.cards = new Map(); // frame -> FrameCard
         this.hoveredFrame = null; // Track frame currently hovered by user mouse
         this.hotkeyFrame = null;
@@ -62,6 +67,162 @@ class MacOSDock {
         this.initDOM();
         this.setupResizer();
         this.setupKeyboardShortcuts();
+    }
+
+    createObjectPicker() {
+        const el = (tag, className, text) => {
+            const node = document.createElement(tag);
+            node.className = className;
+            if (text) node.textContent = text;
+            return node;
+        };
+        const aside = el('aside', 'cvat-qaqc-object-picker');
+        aside.setAttribute('aria-label', 'Chọn đối tượng');
+        const heading = el('div', 'cvat-qaqc-picker-heading');
+        heading.appendChild(el('strong', '', 'Đối tượng'));
+        const label = el('label', 'cvat-qaqc-picker-switch-label');
+        this.multiSwitch = el('input', 'cvat-qaqc-picker-switch');
+        this.multiSwitch.type = 'checkbox'; this.multiSwitch.setAttribute('role', 'switch');
+        this.multiSwitch.addEventListener('change', async () => {
+            const enabled = this.multiSwitch.checked;
+            if (!enabled && this.selectedObjectIDs.length > 1) {
+                const id = this.selectedObjectIDs.includes(this.state.activeClientID) ? this.state.activeClientID : this.selectedObjectIDs[0];
+                if (!await this.chooseObjects([id], id)) { this.multiSwitch.checked = true; return; }
+            }
+            this.multipleObjects = enabled;
+            this.renderObjectPicker();
+        });
+        label.append(this.multiSwitch, el('span', '', 'Chọn nhiều ID'));
+        heading.appendChild(label);
+        const reload = el('button', 'cvat-qaqc-picker-refresh', '↻');
+        reload.type = 'button'; reload.title = 'Làm mới danh sách ID';
+        reload.setAttribute('aria-label', 'Làm mới danh sách ID');
+        reload.addEventListener('click', () => this.refreshObjectCatalog());
+        this.pickerReload = reload;
+        heading.appendChild(reload);
+        const search = el('div', 'cvat-qaqc-picker-search');
+        this.filterInput = el('input', 'cvat-qaqc-picker-input');
+        this.filterInput.type = 'search'; this.filterInput.placeholder = 'Tìm ID hoặc label…';
+        this.filterInput.setAttribute('aria-label', 'Tìm ID hoặc label');
+        this.filterInput.addEventListener('input', () => this.renderObjectPicker());
+        const find = async () => {
+            if (this.pickerBusy) return;
+            const query = this.filterInput.value.trim().replace(/^#/, '');
+            const matches = this.matchingObjects();
+            const target = /^\d+$/.test(query) ? this.objectCatalog.find((item) => item.id === Number(query)) : matches.length === 1 ? matches[0] : null;
+            if (target) await this.chooseObjects(this.multipleObjects ? [...new Set([...this.selectedObjectIDs, target.id])] : [target.id], target.id);
+            else this.pickerStatus.textContent = 'Chọn một ID trong danh sách kết quả.';
+        };
+        this.filterInput.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); find(); } });
+        this.quickFilterBtn = el('button', 'cvat-qaqc-picker-find', 'Tìm');
+        this.quickFilterBtn.addEventListener('click', find);
+        search.append(this.filterInput, this.quickFilterBtn);
+        const mode = el('div', 'cvat-qaqc-picker-mode');
+        this.quickClearBtn = el('button', 'cvat-qaqc-picker-clear', 'Bỏ chọn');
+        this.quickClearBtn.addEventListener('click', () => this.chooseObjects([], null));
+        mode.appendChild(this.quickClearBtn);
+        this.pickerStatus = el('p', 'cvat-qaqc-picker-status', 'Mở job để xem danh sách ID.');
+        this.pickerStatus.setAttribute('role', 'status');
+        this.pickerGrid = el('div', 'cvat-qaqc-picker-grid');
+        aside.append(heading, search, mode, this.pickerStatus, this.pickerGrid);
+        return aside;
+    }
+
+    matchingObjects() {
+        const query = this.filterInput.value.trim().replace(/^#/, '').toLocaleLowerCase();
+        return this.objectCatalog.filter((item) => String(item.id).includes(query) || item.label.toLocaleLowerCase().includes(query));
+    }
+
+    async refreshObjectCatalog() {
+        const job = this.callbacks.getJob?.();
+        const epoch = ++this.catalogEpoch;
+        if (job !== this.catalogJob) {
+            if (this.catalogJob) this.selectedObjectIDs = [];
+            this.catalogJob = job; this.objectCatalog = [];
+            this.multipleObjects = false; this.multiSwitch.checked = false; this.filterInput.value = '';
+        }
+        if (!job) { this.objectCatalog = []; this.renderObjectPicker(); return; }
+        this.pickerReload.disabled = true;
+        this.pickerStatus.textContent = 'Đang đọc danh sách ID…';
+        try {
+            const data = await job.annotations.export();
+            if (epoch !== this.catalogEpoch || job !== this.callbacks.getJob?.()) return;
+            const labels = job.labels || [];
+            this.objectCatalog = (data.tracks || [])
+                .filter((track) => Number.isInteger(track.clientID) && track.shapes?.some((shape) => shape.type === 'cuboid' || (!shape.type && shape.points?.length >= 9)))
+                .map((track) => ({ id: track.clientID, label: labels.find((label) => label.id === track.label_id)?.name || track.label?.name || 'Object' }))
+                .sort((a, b) => a.id - b.id);
+            this.renderObjectPicker();
+        } catch (_) {
+            if (epoch === this.catalogEpoch) this.pickerStatus.textContent = 'Không đọc được danh sách ID. Thử làm mới.';
+        } finally { if (epoch === this.catalogEpoch) this.pickerReload.disabled = false; }
+    }
+
+    renderObjectPicker() {
+        if (!this.pickerGrid) return;
+        this.pickerGrid.replaceChildren();
+        const matches = this.matchingObjects();
+        this.pickerStatus.textContent = `${matches.length}/${this.objectCatalog.length} ID · Đã chọn ${this.selectedObjectIDs.length}`;
+        if (!this.objectCatalog.length) this.pickerStatus.textContent = 'Chưa có track 3D trong job hiện tại.';
+        else if (!matches.length) this.pickerStatus.textContent = 'Không có ID hoặc label phù hợp.';
+        this.quickClearBtn.hidden = !this.selectedObjectIDs.length;
+        this.multiSwitch.disabled = this.pickerBusy;
+        this.quickClearBtn.disabled = this.quickFilterBtn.disabled = this.pickerBusy;
+        for (const item of matches) {
+            const tile = document.createElement('div');
+            tile.className = 'cvat-qaqc-object-tile';
+            tile.classList.toggle('selected', this.selectedObjectIDs.includes(item.id));
+            tile.classList.toggle('current', this.selectedObjectIDs.includes(item.id) && this.state.activeClientID === item.id);
+            if (this.multipleObjects) {
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox'; checkbox.checked = this.selectedObjectIDs.includes(item.id); checkbox.disabled = this.pickerBusy;
+                checkbox.setAttribute('aria-label', `Chọn ID ${item.id}`);
+                checkbox.addEventListener('change', () => {
+                    const ids = checkbox.checked ? [...this.selectedObjectIDs, item.id] : this.selectedObjectIDs.filter((id) => id !== item.id);
+                    const focus = checkbox.checked ? item.id : ids.includes(this.state.activeClientID) ? this.state.activeClientID : ids[0];
+                    this.chooseObjects(ids, focus ?? null);
+                });
+                tile.appendChild(checkbox);
+            }
+            const button = document.createElement('button');
+            button.type = 'button'; button.disabled = this.pickerBusy;
+            button.setAttribute('aria-label', `Xem ID ${item.id}: ${item.label}`);
+            button.setAttribute('aria-pressed', String(this.state.activeClientID === item.id && this.selectedObjectIDs.includes(item.id)));
+            const id = document.createElement('strong'); id.textContent = `#${item.id}`;
+            const label = document.createElement('span'); label.textContent = item.label; label.title = item.label;
+            button.append(id, label);
+            button.addEventListener('click', () => this.chooseObjects(this.multipleObjects ? [...new Set([...this.selectedObjectIDs, item.id])] : [item.id], item.id));
+            tile.appendChild(button); this.pickerGrid.appendChild(tile);
+        }
+    }
+
+    async chooseObjects(ids, focusID) {
+        if (this.pickerBusy) return false;
+        const previous = [...this.selectedObjectIDs];
+        const previousFilteredID = this.state.filteredClientID;
+        const job = this.callbacks.getJob?.();
+        const clearing = ids.length === 0;
+        this.pickerBusy = true;
+        if (clearing) {
+            // Reflect the clear action before restoring every CVAT object, which can be expensive.
+            this.selectedObjectIDs = [];
+            this.state.filteredClientID = null;
+        }
+        this.renderObjectPicker();
+        this.pickerStatus.textContent = clearing ? 'Đang khôi phục tất cả đối tượng…' : 'Đang nạp đối tượng…';
+        try {
+            const success = ids.length ? await this.callbacks.onFilterObject?.(focusID, ids) : await this.callbacks.onClearFilter?.();
+            if (job !== this.callbacks.getJob?.()) throw new Error('Job đã thay đổi. Hãy chọn ID lại.');
+            if (success === false) throw new Error('Không thể nạp đối tượng đã chọn.');
+            this.selectedObjectIDs = [...ids];
+            this.state.filteredClientID = focusID;
+            return true;
+        } catch (error) {
+            this.selectedObjectIDs = job === this.callbacks.getJob?.() ? previous : [];
+            this.state.filteredClientID = job === this.callbacks.getJob?.() ? previousFilteredID : null;
+            global.CVATQAQC.Notifications?.showError(error, { title: 'Không thể chọn ID' });
+            return false;
+        } finally { this.pickerBusy = false; this.renderObjectPicker(); }
     }
 
     initDOM() {
@@ -161,92 +322,7 @@ class MacOSDock {
         framesBadge.textContent = '0 frames';
         this.framesBadge = framesBadge;
 
-        // Quick ID Filter Bar (Allows user to quickly filter by Object ID directly inside the dock)
-        const filterBar = document.createElement('div');
-        filterBar.className = 'cvat-qaqc-quick-filter-bar';
-        this.filterBar = filterBar;
-
-        const filterIcon = document.createElement('span');
-        filterIcon.className = 'cvat-qaqc-filter-icon';
-        filterIcon.textContent = '#';
-
-        const filterInput = document.createElement('input');
-        filterInput.type = 'text';
-        filterInput.className = 'cvat-qaqc-quick-filter-input';
-        filterInput.placeholder = 'ID...';
-        filterInput.title = 'Nhập Object ID cần lọc và ấn Enter';
-        this.filterInput = filterInput;
-
-        const filterBtn = document.createElement('button');
-        filterBtn.className = 'cvat-qaqc-quick-filter-btn';
-        filterBtn.textContent = 'Lọc';
-        filterBtn.title = 'Lọc chỉ hiển thị Object ID này (Enter)';
-        this.quickFilterBtn = filterBtn;
-
-        const clearFilterBtn = document.createElement('button');
-        clearFilterBtn.className = 'cvat-qaqc-quick-clear-btn';
-        clearFilterBtn.textContent = '✕';
-        clearFilterBtn.title = 'Bỏ lọc, hiện lại toàn bộ đối tượng';
-        clearFilterBtn.style.display = 'none';
-        this.quickClearBtn = clearFilterBtn;
-
-        const executeFilter = async () => {
-            const rawVal = filterInput.value.trim().replace(/^#/, '');
-            if (!rawVal) return;
-            const targetID = parseInt(rawVal, 10);
-            if (isNaN(targetID)) {
-                filterBar.classList.add('error-shake');
-                setTimeout(() => filterBar.classList.remove('error-shake'), 600);
-                return;
-            }
-            filterBtn.disabled = true;
-            filterBtn.textContent = '...';
-            try {
-                if (typeof this.callbacks.onFilterObject === 'function') {
-                    const success = await this.callbacks.onFilterObject(targetID);
-                    if (success !== false) {
-                        this.setFilteredObjectID(targetID);
-                    } else {
-                        global.CVATQAQC.Notifications?.showError(`Không tìm thấy hoặc không thể nạp Object ID #${targetID}.`,
-                            { title: 'Không thể tìm object' });
-                        filterBar.classList.add('error-shake');
-                        filterInput.title = `Không tìm thấy Object ID #${targetID}`;
-                        setTimeout(() => filterBar.classList.remove('error-shake'), 600);
-                    }
-                }
-            } catch (error) {
-                global.CVATQAQC.Notifications?.showError(error, { title: 'Không thể tìm object' });
-            } finally {
-                filterBtn.disabled = false;
-                filterBtn.textContent = 'Lọc';
-            }
-        };
-
-        filterInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                e.preventDefault();
-                executeFilter();
-            }
-        });
-        filterBtn.addEventListener('click', () => executeFilter());
-
-        clearFilterBtn.addEventListener('click', async () => {
-            if (typeof this.callbacks.onClearFilter === 'function') {
-                await this.callbacks.onClearFilter();
-            }
-            this.setFilteredObjectID(null);
-            filterInput.value = '';
-        });
-
-        filterBar.appendChild(filterIcon);
-        filterBar.appendChild(filterInput);
-        filterBar.appendChild(filterBtn);
-        filterBar.appendChild(clearFilterBtn);
-
-        leftGroup.appendChild(title);
-        leftGroup.appendChild(trackBadge);
-        leftGroup.appendChild(framesBadge);
-        leftGroup.appendChild(filterBar);
+        leftGroup.append(title, trackBadge, framesBadge);
 
         // Right Controls
         const rightGroup = document.createElement('div');
@@ -396,13 +472,16 @@ class MacOSDock {
         emptyTitle.textContent = 'No 3D Object Selected';
         const emptySub = document.createElement('div');
         emptySub.className = 'cvat-qaqc-empty-sub';
-        emptySub.textContent = 'Nhập Object ID vào ô tìm kiếm rồi bấm Lọc hoặc Enter để nạp các frame vào Inspector.';
+        emptySub.textContent = 'Chọn ID trong danh sách bên phải để xem các frame.';
         empty.appendChild(emptyTitle);
         empty.appendChild(emptySub);
         this.emptyState = empty;
         filmstrip.appendChild(empty);
 
-        dock.appendChild(filmstrip);
+        const workspace = document.createElement('div');
+        workspace.className = 'cvat-qaqc-workspace';
+        workspace.append(filmstrip, this.createObjectPicker());
+        dock.appendChild(workspace);
 
         const helpDialog = this.createHelpDialog();
         dock.appendChild(helpDialog);
@@ -852,17 +931,9 @@ class MacOSDock {
      */
     setFilteredObjectID(clientID) {
         this.state.filteredClientID = clientID;
-        if (this.filterInput) {
-            if (clientID !== null && typeof clientID !== 'undefined') {
-                this.filterInput.value = String(clientID);
-                if (this.quickClearBtn) this.quickClearBtn.style.display = 'inline-flex';
-                if (this.filterBar) this.filterBar.classList.add('is-filtered');
-            } else {
-                this.filterInput.value = '';
-                if (this.quickClearBtn) this.quickClearBtn.style.display = 'none';
-                if (this.filterBar) this.filterBar.classList.remove('is-filtered');
-            }
-        }
+        if (clientID === null || clientID === undefined) this.selectedObjectIDs = [];
+        else if (!this.selectedObjectIDs.includes(clientID)) this.selectedObjectIDs = [clientID];
+        this.renderObjectPicker();
     }
 
     /**
@@ -899,6 +970,7 @@ class MacOSDock {
             this.callbacks.onOpen();
         }
 
+        await this.refreshObjectCatalog();
         this.refreshAllCards();
         this.scrollToActiveFrame();
     }

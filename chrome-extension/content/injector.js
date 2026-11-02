@@ -41,7 +41,7 @@ const {
     let historyRefreshEpoch = 0;
 
     const dock = new MacOSDock({
-        onFilterObject: async (id) => {
+        onFilterObject: async (id, selectedIDs = [id]) => {
             if (!hook.jobInstance) return false;
             const job = hook.jobInstance;
             const operation = ++searchEpoch;
@@ -51,15 +51,13 @@ const {
 
             console.log(`[CVAT-QAQC] User requested quick filter for Object ID #${targetID}...`);
 
-            // 1. Isolate in CVAT (Three.js and Redux)
-            await hook.filterByObjectID(targetID);
-            if (operation !== searchEpoch || hook.jobInstance !== job) return false;
-
-            // 2. Load track frames for this ID
+            // Validate the focused track before changing the workspace filter.
             try {
                 const trackFrames = await TrackReader.getTrackFrames(targetID, job);
                 if (operation !== searchEpoch || hook.jobInstance !== job) return false;
                 if (trackFrames && trackFrames.length > 0) {
+                    await hook.filterByObjectIDs(selectedIDs);
+                    if (operation !== searchEpoch || hook.jobInstance !== job) return false;
                     inspectorJob = job;
                     currentClientID = targetID;
                     currentTrackFrames = trackFrames;
@@ -89,8 +87,13 @@ const {
             }
         },
         onClearFilter: async () => {
-            await hook.clearFilter();
+            searchEpoch++;
+            historyRefreshEpoch++;
+            currentClientID = null;
+            currentTrackFrames = [];
+            dock.updateTrack(null, [], hook.currentFrame, pcdCache);
             dock.setFilteredObjectID(null);
+            return hook.clearFilter();
         },
         onJumpToFrame: (f) => hook.jumpToFrame(f),
         onUndo: () => hook.undo(),
@@ -210,6 +213,7 @@ const {
     // CVAT selection does not select an Inspector track. Only explicit ID search does.
     // Clear the old Inspector only when its owning job has actually changed.
     hook.on('objectChange', ({ job }) => {
+        if (dock.isOpen && dock.catalogJob !== job) dock.refreshObjectCatalog();
         if (inspectorJob && job !== inspectorJob) {
             searchEpoch++;
             historyRefreshEpoch++;

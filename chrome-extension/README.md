@@ -138,8 +138,11 @@ Sau khi sửa mã nguồn:
 3. Nút pill `[ ⏻ 3D ]` nằm khiêm tốn ở góc dưới bên phải màn hình:
    - Bấm `[ ⏻ 3D ]` hoặc nhấn **`Alt + Q`** để bật drawer kiểm định.
    - Nhấn **`Alt + Q`** hoặc nút `[ ⏻ UI ]` trên toolbar để tắt nhanh giao diện.
-4. Nhập Object ID trong ô tìm kiếm của Inspector, rồi bấm **Lọc** hoặc **Enter**:
-   - Panel nạp chuỗi frame của đúng ID đã tìm. Click object trên CVAT hoặc mở lại UI không tự chọn/nạp object vào Inspector.
+4. Chọn ID trong **lưới Đối tượng bên phải**; tìm nhanh bằng ID hoặc label ở ô search phía trên:
+   - Search chỉ thu hẹp danh sách, chưa đổi bộ lọc. Bấm một ô ID để nạp frame của track đó; Enter/Tìm chọn ID chính xác hoặc kết quả duy nhất.
+   - Switch **Chọn nhiều ID** mặc định tắt. Bật để chọn nhiều ID bằng checkbox; CVAT lọc theo tất cả ID đã chọn. Bấm tên ID để xem track đó trong framecard mà vẫn giữ nhóm đã chọn. Tắt switch giữ lại ID đang xem. **Bỏ chọn** khôi phục mọi object trên CVAT và làm trống Inspector.
+   - Danh sách gồm các track cuboid trong annotation của job đang mở, kể cả track không tồn tại ở frame hiện tại; hiển thị ID và label. Không tải dữ liệu từ các job khác của task. Nút ↻ đọc lại danh sách khi thêm/xóa track hoặc đổi label.
+   - Framecard, phím tắt và batch attribute chỉ chỉnh track đang xem. Click object trên CVAT hoặc mở lại UI không tự chọn/nạp object vào Inspector.
    - Bỏ chọn object hoặc chuyển qua đoạn Outside không xóa track đang kiểm tra. Chỉ tìm ID khác mới đổi object trong Inspector; đổi job sẽ xóa track cũ.
    - Mỗi frame hiển thị đầy đủ 3 góc chiếu Top, Front, Side kèm góc quay `Yaw: XX.X°` và kích thước.
 5. Để chỉnh sửa một frame:
